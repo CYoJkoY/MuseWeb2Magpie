@@ -16,7 +16,7 @@ The browser boundary is different. Muse's page is controlled through Chrome DevT
 
 The two processes communicate with newline-delimited JSON over standard input and output. The Go process authenticates and validates client requests; the TypeScript driver receives only the operation payload it needs and reports deltas, results, errors, callbacks, cookies, and lifecycle events.
 
-The package ships native engine binaries for the supported platform and architecture. Source development requires Go and Node.js `>=22.18`; normal package use does not require a separate Go installation.
+The package ships native engine binaries for the supported platform and architecture. Source development requires Go `>=1.27.4` and Node.js `>=22.18`; normal package use does not require a separate Go installation. CI and releases use the minimum Go version recorded in `engine-go/go.mod`, including the macOS linker fixes needed by current runners.
 
 ## Alternatives considered
 

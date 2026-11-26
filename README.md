@@ -205,7 +205,7 @@ Connector 不启动浏览器、不读 cookie、不 spawn 进程，只连接你�
 - [Magpie](https://github.com/yetone/magpie)，在 0.1.1223 上验证过。
 - 默认用开源指纹浏览器 [Apostate](https://github.com/heretic-tech/apostate) 打开 muse.ai：本机已有就复用；没有时引擎启动时自动下载一次固定版本（带 sha256 校验）到数据目录，以后复用。下载失败或设为 `MUSE_WEB_FINGERPRINT=0` 时，用本机的 Chrome、Edge、Chromium 或 Brave。Firefox 不能当登录窗口：引擎靠 Chrome DevTools Protocol 操作页面。
 - 安装包已带当前平台和架构的 Go 原生引擎，日常使用不需要另装 Go；引擎会使用插件宿主提供的 TypeScript 运行时启动浏览器驱动。
-- 如果从源码开发或运行测试，需要 Go 工具链与 Node.js `>=22.18`；具体命令见[开发](#readme-development)。
+- 如果从源码开发或运行测试，需要 Go `>=1.27.4` 与 Node.js `>=22.18`；具体命令见[开发](#readme-development)。
 - 能访问 muse.ai 的网络。需要代理时见[设置](#readme-settings)。
 
 ### 命令
@@ -369,7 +369,7 @@ npm run test:go        # Go 单元测试
 npm test               # 插件契约 + TypeScript / Go 引擎集成测试
 ```
 
-源码全部是 TypeScript，不产出也不提交 JavaScript。Go 引擎的 HTTP 和存储部分不依赖 Node；浏览器驱动仍由宿主运行时加载 `engine/driver.ts`，这样页面评估相关逻辑不会被硬塞进另一种语言。
+插件、浏览器驱动和测试使用 TypeScript，HTTP 引擎与账号存储使用 Go；不产出也不提交 JavaScript 源文件。Go 引擎的 HTTP 和存储部分不依赖 Node；浏览器驱动由宿主运行时加载 `engine/driver.ts`。
 
 `npm run build:engine` 需要 Go；`npm test` 的 `pretest` 会自动构建当前平台的引擎。CI 会先安装 Node.js 与 Go，再执行类型检查、no-JavaScript 守卫、Go 检查和完整测试。
 
@@ -384,7 +384,7 @@ git push origin v0.10.0
 
 ```sh
 docker build -t magpie-muse-web-linux-test test/linux
-docker run --rm -v "$PWD:/plugin:ro" -w /plugin magpie-muse-web-linux-test node --test contract.test.ts "test/*.test.ts"
+docker run --rm -v "$PWD:/source:ro" magpie-muse-web-linux-test sh -c 'cp -a /source /plugin && cd /plugin && npm ci && npm test'
 ```
 
 ### 代码结构
