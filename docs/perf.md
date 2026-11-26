@@ -55,6 +55,49 @@ Reading the numbers:
 - These are the local pipe costs. Real chats are dominated by the browser and muse.ai, which is why
   the changes above target round trips rather than CPU.
 
+## CPU profile
+
+The benchmarks above show per-operation cost; the CPU profile shows where that time goes. Point
+`-cpuprofile` at a scratch path; `*.prof` is ignored so a stray profile cannot be committed.
+
+```sh
+go -C engine-go test -run '^$' -bench . -benchtime 2s -cpuprofile cpu.prof ./...
+go -C engine-go tool pprof -top -nodecount=14 cpu.prof
+```
+
+`-benchtime 2s` matters: the default 300 ms per benchmark is too short for the sampler to collect
+enough ticks, and a run at that length produced zero samples.
+
+One run on the machine above collected 17,270 ms of samples over 13.5 s. The top flat nodes:
+
+| Node | flat% | cum% |
+| :--- | ---: | ---: |
+| `unicode/utf8.decodeRuneSlow` | 4.34 | 4.34 |
+| `runtime.preemptM` | 3.47 | 4.11 |
+| `runtime.sysUnusedOS` | 2.95 | 2.95 |
+| `jsonwire.ConsumeStringResumable` | 2.72 | 7.53 |
+| `runtime.scanObject` | 2.55 | 6.14 |
+| `runtime.typePointers.next` | 2.08 | 2.32 |
+| `runtime.scanblock` | 1.97 | 2.37 |
+| `jsonwire.ConsumeWhitespace` | 1.91 | 1.91 |
+| `jsonwire.AppendQuote` | 1.68 | 2.49 |
+
+Reading the profile:
+
+- No single function owns the time. The largest flat node is 4.34%, and the whole `encoding/json`
+  path (`ConsumeStringResumable`, `ConsumeWhitespace`, `AppendQuote`, `AppendUnquote`) accumulates
+  most of its share through the struct codec, which is 30.8% cumulative. That is the cost of
+  turning every streamed line into an `event` and every request into JSON.
+- The next cluster is garbage collection and scheduling (`scanObject`, `scanblock`,
+  `typePointers.next`, `preemptM`, `sysUnusedOS`). The benchmarks allocate 1–19 objects per
+  operation, so the collector has steady work; this is the price of the copy-on-read store and the
+  per-line decode, not a leak.
+- `utf8.decodeRuneSlow` is the slow path for non-ASCII runes. It appears because chat payloads are
+  Chinese, so most characters take the multi-byte branch instead of the fast ASCII one.
+- The absence of a hot user function is the point: local protocol work is spread thin, and a real
+  chat spends its time in the browser and muse.ai. Optimizing this profile further would shave
+  microseconds off a path already measured in microseconds.
+
 ## Hot paths
 
 - **Engine → driver:** each operation is one JSON object written by `driver.send` (`json.Marshal`)
