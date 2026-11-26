@@ -1,17 +1,18 @@
 // The plugin with no engine configured: it starts its own engine, signs in through the browser
 // and chats, all against the loopback fake muse.ai. Skipped without Chrome/Edge/Chromium.
 import { after, before, test } from "node:test"
+// @ts-nocheck
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import http from "node:http"
-import { VERSION } from "../engine/version.mjs"
+import { VERSION } from "../engine/version.ts"
 import os from "node:os"
 import path from "node:path"
-import { findBrowser, freePort } from "../engine/browser.mjs"
-import { anyFetch } from "../engine/local-fetch.mjs"
-import { MuseWebPlugin } from "../index.mjs"
-import { startFakeMuse } from "./fake-muse.mjs"
+import { findBrowser, freePort } from "../engine/browser.ts"
+import { anyFetch } from "../engine/local-fetch.ts"
+import { MuseWebPlugin } from "../index.ts"
+import { startFakeMuse } from "./fake-muse.ts"
 
 const skip = findBrowser() ? false : "no Chrome/Edge/Chromium installed"
 let fake, home, port, hooks
@@ -41,7 +42,7 @@ before(async () => {
     MUSE_WEB_LOGIN_HEADLESS: "1",
     MUSE_WEB_PREWARM: "0",
     // The bundled test runs offline against the loopback fake: a real Apostate download would
-    // outlast the test. The downloader has its own suite in fingerprint.test.mjs.
+    // outlast the test. The downloader has its own suite in fingerprint.test.ts.
     MUSE_WEB_FINGERPRINT: "0",
   })
 })
@@ -81,11 +82,11 @@ test("an engine left by an older plugin version is stopped and replaced", { skip
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ ok: true, engine: "muse-web", version: "0.0.1", accounts: 0 }))
   })
-  await new Promise((r) => old.listen(port, "127.0.0.1", r))
-  hooks = await MuseWebPlugin()
+  await new Promise<void>((r) => old.listen(port, "127.0.0.1", r))
+  hooks = await MuseWebPlugin({})
   const usage = await hooks.auth.usage(async () => ({ type: "oauth", refresh: "muse-none", access: "muse-none", expires: 1 }))
   assert.ok(stopped, "old engine was not asked to stop")
-  const health = await (await anyFetch(`http://127.0.0.1:${port}/v1/health`)).json()
+  const health = await (await anyFetch(`http://127.0.0.1:${port}/v1/health`)).json() as any
   assert.equal(health.version, VERSION)
   assert.equal(usage.signIn, "expired")
 })

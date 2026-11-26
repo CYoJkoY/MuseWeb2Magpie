@@ -1,14 +1,14 @@
 // Find and start a Chromium-family browser on macOS, Windows or Linux.
-import { spawn } from "node:child_process"
+import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import path from "node:path"
-import { CDP, httpJSON } from "./cdp.mjs"
+import { CDP, httpJSON } from "./cdp.ts"
 
-export function browserCandidates(platform = process.platform, env = process.env) {
+export function browserCandidates(platform = process.platform, env: NodeJS.ProcessEnv = process.env): string[] {
   if (platform === "darwin") {
-    const apps = [
+    const apps: Array<[string, string]> = [
       ["Google Chrome", "Google Chrome"],
       ["Microsoft Edge", "Microsoft Edge"],
       ["Chromium", "Chromium"],
@@ -19,7 +19,7 @@ export function browserCandidates(platform = process.platform, env = process.env
   }
   if (platform === "win32") {
     const roots = [env.PROGRAMFILES, env["PROGRAMFILES(X86)"], env.LOCALAPPDATA].filter(Boolean)
-    const rels = [
+    const rels: Array<string[]> = [
       ["Google", "Chrome", "Application", "chrome.exe"],
       ["Microsoft", "Edge", "Application", "msedge.exe"],
       ["Chromium", "Application", "chrome.exe"],
@@ -32,14 +32,14 @@ export function browserCandidates(platform = process.platform, env = process.env
   return [...new Set(dirs)].flatMap((dir) => names.map((name) => path.join(dir, name))).concat(["/opt/google/chrome/chrome"])
 }
 
-export function findBrowser(env = process.env, platform = process.platform, exists = existsSync) {
+export function findBrowser(env: NodeJS.ProcessEnv = process.env, platform = process.platform, exists = existsSync): string | null {
   const own = (env.MUSE_WEB_CHROME || "").trim()
   if (own) return exists(own) ? own : null
   return browserCandidates(platform, env).find((p) => exists(p)) ?? null
 }
 
 // The name a person recognizes for a browser executable, used in the sign-in choices.
-function browserName(file) {
+function browserName(file: string): string {
   const lower = file.toLowerCase()
   // Linux ships the binary as microsoft-edge / microsoft-edge-stable, Windows as msedge.exe,
   // macOS as "Microsoft Edge.app/…/Microsoft Edge".
@@ -52,13 +52,13 @@ function browserName(file) {
 // The sign-in prompt's choices: only browsers that are actually installed, one entry per browser.
 // MUSE_WEB_CHROME comes first when it points at an installed file, since the engine would have
 // picked it by itself; choosing an entry overrides that default for this sign-in only.
-export function browserOptions(env = process.env, platform = process.platform, exists = existsSync) {
-  const out = []
-  const seen = new Set()
+export function browserOptions(env: NodeJS.ProcessEnv = process.env, platform = process.platform, exists = existsSync): Array<{ label: string; value: string }> {
+  const out: Array<{ label: string; value: string }> = []
+  const seen = new Set<string>()
   // One entry per browser, not per path: one Linux install offers google-chrome,
   // google-chrome-stable and /opt/google/chrome/chrome for the same Chrome, and a person
   // choosing at sign-in wants to see each browser once.
-  const add = (file, name, label = name) => {
+  const add = (file: string, name: string, label = name) => {
     if (seen.has(name)) return
     seen.add(name)
     out.push({ label, value: file })
@@ -71,12 +71,12 @@ export function browserOptions(env = process.env, platform = process.platform, e
   return out
 }
 
-export function freePort() {
-  return new Promise((resolve, reject) => {
+export function freePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
     const server = createServer()
     server.once("error", reject)
     server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address()
+      const { port } = server.address() as { port: number }
       server.close(() => resolve(port))
     })
   })
@@ -85,7 +85,17 @@ export function freePort() {
 // proxy: "" leaves the browser on the system's own setting, "direct" ignores it, a URL forces it.
 // hidden: a real window placed off-screen, for sites that treat headless differently.
 // extraArgs: flags only one browser understands (Apostate's --fingerprint), left empty for Chrome.
-export function browserArgs({ port, profileDir, headless, hidden = false, proxy, url = "about:blank", extraArgs = [] }) {
+export interface BrowserArgs {
+  port: number
+  profileDir: string
+  headless?: boolean
+  hidden?: boolean
+  proxy?: string
+  url?: string
+  extraArgs?: string[]
+}
+
+export function browserArgs({ port, profileDir, headless, hidden = false, proxy, url = "about:blank", extraArgs = [] }: BrowserArgs): string[] {
   const args = [
     `--remote-debugging-port=${port}`,
     "--remote-debugging-address=127.0.0.1",
@@ -127,13 +137,13 @@ export function browserArgs({ port, profileDir, headless, hidden = false, proxy,
 
 // Whether a Chrome is still using this profile. On macOS and Linux its SingletonLock is a
 // symlink to "host-pid"; Windows keeps the profile's files open, so removing it fails there.
-function inUse(dir) {
+function inUse(dir: string): boolean {
   try {
     const pid = Number(readlinkSync(path.join(dir, "SingletonLock")).split("-").pop())
     if (!(pid > 0)) return false
     process.kill(pid, 0)
     return true
-  } catch (err) {
+  } catch (err: any) {
     return err.code === "EPERM"
   }
 }
@@ -141,28 +151,49 @@ function inUse(dir) {
 // Removes the temporary profiles of browsers that are gone: an engine killed outright or a
 // power cut skips the cleanup on close. The list is read before returning, so a profile made
 // after the call is never touched; the removal itself runs on in the background.
-export function sweepProfiles(root) {
-  let names = []
+export function sweepProfiles(root: string): Promise<void> {
+  let names: string[] = []
   try {
     names = readdirSync(root).filter((n) => n.startsWith("run-"))
   } catch {
     return Promise.resolve()
   }
   return Promise.all(names.map((n) => path.join(root, n)).filter((dir) => !inUse(dir))
-    .map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})))
+    .map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {}))).then(() => {})
 }
 
 const STDERR_LIMIT = 4096
 
 // Chrome's own message (a missing library, a locked profile, a rejected flag) is the only useful
 // clue when it exits before its debugging port opens; a bare "exited during start" hides all of it.
-function startFailure({ code, signal, stderr }) {
+function startFailure({ code, signal, stderr }: { code: number | null; signal: string | null; stderr: string }): Error {
   const status = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
   const detail = String(stderr || "").trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ")
   return new Error(`browser exited during start (${status})${detail ? `: ${detail}` : ""}`)
 }
 
-export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url, port, waitMs = 30_000, extraArgs = [] }) {
+export interface Launched {
+  proc: ChildProcess
+  port: number
+  browser: CDP
+  profileDir: string
+  close: () => Promise<void>
+}
+
+export interface LaunchOptions {
+  executable: string
+  profileDir: string
+  temporary?: boolean
+  headless?: boolean
+  hidden?: boolean
+  proxy?: string
+  url?: string
+  port?: number
+  waitMs?: number
+  extraArgs?: string[]
+}
+
+export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", port, waitMs = 30_000, extraArgs = [] }: LaunchOptions): Promise<Launched> {
   if (!executable) {
     throw new Error("没找到可用的浏览器：开源指纹浏览器 Apostate 没能下载，本机也没有 Chrome、Edge 或 Chromium；"
       + "联网后重试，或用 MUSE_WEB_FINGERPRINT_BROWSER / MUSE_WEB_CHROME 指定一个可执行文件")
@@ -178,7 +209,7 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
   const cleanup = async () => {
     if (temporary) await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {})
   }
-  let proc
+  let proc: ChildProcess
   try {
     proc = spawn(executable, browserArgs({ port, profileDir, headless, hidden, proxy, url, extraArgs }), {
       stdio: ["ignore", "ignore", "pipe"],
@@ -194,27 +225,27 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
   proc.stderr?.on("data", (chunk) => {
     if (stderr.length < STDERR_LIMIT) stderr += chunk
   })
-  const stderrDone = new Promise((resolve) => {
+  const stderrDone = new Promise<void>((resolve) => {
     if (!proc.stderr) return resolve()
     proc.stderr.once("close", resolve)
     proc.stderr.once("error", resolve)
   })
   let exited = false
-  let exitInfo = {}
-  let spawnError = null
+  let exitInfo: { code: number | null; signal: string | null } = { code: null, signal: null }
+  let spawnError: Error | null = null
   proc.on("error", (err) => { spawnError = err })
   proc.on("exit", (code, signal) => {
     exited = true
     exitInfo = { code, signal }
   })
-  let closing
-  const close = (browser) => closing ??= stopBrowser(proc, browser).finally(cleanup)
+  let closing: Promise<void> | undefined
+  const close = (browser?: CDP): Promise<void> => (closing ??= stopBrowser(proc, browser).finally(cleanup))
   const started = Date.now()
   let last = null
   while (Date.now() - started < waitMs) {
     if (spawnError || exited) {
       // Let the last stderr chunks arrive before closing: the exit event can come first.
-      if (exited) await Promise.race([stderrDone, new Promise((r) => setTimeout(r, 200))])
+      if (exited) await Promise.race([stderrDone, new Promise<void>((r) => setTimeout(r, 200))])
       await close()
       throw spawnError || startFailure({ ...exitInfo, stderr })
     }
@@ -227,16 +258,16 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
     } catch (err) {
       last = err
     }
-    await new Promise((r) => setTimeout(r, 250))
+    await new Promise<void>((r) => setTimeout(r, 250))
   }
   await close()
   throw new Error(`browser did not open its debugging port: ${last?.message ?? "timeout"}`)
 }
 
 // Resolves once the process is gone: asked politely first, killed after 3 s.
-export function stopBrowser(proc, browser) {
+export function stopBrowser(proc: ChildProcess, browser?: CDP): Promise<void> {
   if (!proc.pid || proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve()
-  const gone = new Promise((resolve) => proc.once("exit", resolve))
+  const gone = new Promise<void>((resolve) => proc.once("exit", () => resolve()))
   try {
     browser?.send("Browser.close", {}, 3000).catch(() => {})
   } catch {}

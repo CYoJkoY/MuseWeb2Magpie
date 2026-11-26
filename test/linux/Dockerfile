@@ -1,6 +1,6 @@
 # Linux test bed: Node 22 + Debian Chromium, no desktop, running as root (so --no-sandbox applies).
 #   docker build -t magpie-muse-web-linux-test test/linux
-#   docker run --rm -v "$PWD:/plugin:ro" -w /plugin magpie-muse-web-linux-test node --test contract.test.mjs "test/*.test.mjs"
+#   docker run --rm -v "$PWD:/plugin:ro" -w /plugin magpie-muse-web-linux-test node --test contract.test.ts "test/*.test.ts"
 # Behind a proxy, add --build-arg http_proxy=... --build-arg https_proxy=... to the build.
 FROM node:22-bookworm-slim
 ARG http_proxy

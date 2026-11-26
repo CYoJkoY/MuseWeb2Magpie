@@ -39,7 +39,7 @@ jobs:
       - name: Check the tag matches package.json and take the changelog section
         run: |
           set -euo pipefail
-          node tools/release-meta.mjs "$TAG" | tee notes.md
+          node tools/release-meta.ts "$TAG" | tee notes.md
 
       - name: Tests
         run: npm test

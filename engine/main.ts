@@ -1,4 +1,4 @@
-// Engine process. The plugin starts it detached with Magpie's own Bun; `node main.mjs` works too.
+// Engine process. The plugin starts it detached with Magpie's own Bun; `node main.ts` works too.
 // Settings (all optional): MUSE_WEB_HOME, MUSE_WEB_ENGINE_PORT, MUSE_WEB_PROXY, MUSE_WEB_BROWSER
 // (headless | hidden | show), MUSE_WEB_CHROME, MUSE_WEB_SITE, MUSE_WEB_IDLE_MIN.
 // The default browser is the open-source fingerprint browser Apostate: a copy already on this
@@ -8,23 +8,23 @@
 // MUSE_WEB_PARENT_PID is set by the plugin: the engine stops when that process exits.
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs"
 import path from "node:path"
-import { findBrowser } from "./browser.mjs"
-import { ensureFingerprintBrowser } from "./fingerprint.mjs"
-import { anyFetch } from "./local-fetch.mjs"
-import { Logins } from "./login.mjs"
-import { AuthError, Muse, QuotaError, redact } from "./muse.mjs"
-import { proxiedFetch, resolveProxy } from "./net.mjs"
-import { watchParent } from "./parent.mjs"
-import { dataDir, engineKey, enginePort } from "./paths.mjs"
-import { createServer, VERSION } from "./server.mjs"
-import { Store } from "./store.mjs"
+import { findBrowser } from "./browser.ts"
+import { ensureFingerprintBrowser } from "./fingerprint.ts"
+import { anyFetch } from "./local-fetch.ts"
+import { Logins } from "./login.ts"
+import { AuthError, Muse, QuotaError, redact } from "./muse.ts"
+import { proxiedFetch, resolveProxy } from "./net.ts"
+import { watchParent } from "./parent.ts"
+import { dataDir, engineKey, enginePort } from "./paths.ts"
+import { createServer, VERSION } from "./server.ts"
+import { Store } from "./store.ts"
 
 const env = process.env
 const dir = dataDir(env)
 mkdirSync(dir, { recursive: true })
 const logFile = path.join(dir, "engine.log")
 
-function log(line) {
+function log(line: string) {
   process.stderr.write(line + "\n")
   try {
     if (statSync(logFile, { throwIfNoEntry: false })?.size > 5 << 20) renameSync(logFile, `${logFile}.1`)
@@ -32,12 +32,12 @@ function log(line) {
   } catch {}
 }
 
-const masked = (url) => String(url).replace(/\/\/[^@/]+@/, "//***@")
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const masked = (url: string) => String(url).replace(/\/\/[^@/]+@/, "//***@")
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 // A new account's VM can still be warming when the test message goes out. Retry that, but not
 // a refused session (AuthError) or a spent allowance (QuotaError, still a working sign-in).
-async function verifyAccount(account, tries = 3) {
+async function verifyAccount(account: any, tries = 3) {
   let last
   for (let i = 0; i < tries; i++) {
     try {
@@ -210,9 +210,9 @@ setInterval(() => {
   }
 }, 60_000).unref()
 
-server.on("error", async (err) => {
+server.on("error", async (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
-    const other = await anyFetch(`http://127.0.0.1:${port}/v1/health`).then((r) => r.json()).catch(() => null)
+    const other = await anyFetch(`http://127.0.0.1:${port}/v1/health`).then((r) => r.json() as Promise<any>).catch(() => null as any)
     if (other?.engine === "muse-web") {
       log(`another muse-web engine already serves port ${port}; leaving it running`)
       process.exit(0)

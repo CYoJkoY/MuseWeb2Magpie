@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import http from "node:http"
-import { MuseWebConnectorPlugin } from "./index.mjs"
+import { MuseWebConnectorPlugin } from "./index.ts"
 
 let server, base
 const seen = []
@@ -43,7 +43,7 @@ const boot = (engine = base, key = "secret") => MuseWebConnectorPlugin({}, { eng
 
 test("config points the provider at the running engine", async () => {
   const hooks = await boot()
-  const cfg = {}
+  const cfg: any = {}
   await hooks.config(cfg)
   const provider = cfg.provider["muse-web"]
   assert.equal(provider.api, `${base}/v1`)
@@ -75,7 +75,7 @@ test("the loader forwards the account handle and engine key", async () => {
 
 test("usage and refresh come from the engine", async () => {
   const hooks = await boot()
-  const card = await hooks.auth.usage(async () => ({ type: "api", key: "muse-abc" }))
+  const card: any = await hooks.auth.usage(async () => ({ type: "api", key: "muse-abc" }))
   assert.equal(card.plan, "muse.ai · 已就绪")
   assert.equal(card.windows[0].name, "每周")
   assert.equal(card.signIn, "kept")
@@ -89,7 +89,7 @@ test("sign-in goes through the engine and returns its handle", async () => {
   const login = await method.authorize()
   assert.equal(login.method, "auto")
   assert.match(login.url, /\/login\/login-1$/)
-  const done = await login.callback()
+  const done: any = await login.callback()
   assert.equal(done.type, "success")
   assert.equal(done.refresh, "muse-abc")
 })

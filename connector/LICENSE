@@ -22,7 +22,7 @@ SOFTWARE.
 
 ---
 
-engine/cdp.mjs and the page logic in engine/muse.mjs are ported from muse2api
+engine/cdp.ts and the page logic in engine/muse.ts are ported from muse2api
 (https://github.com/czg86389-hub/muse2api), used under this license:
 
 MIT License

@@ -13,7 +13,8 @@ import { chmodSync, closeSync, existsSync as fsExists, mkdirSync, openSync, read
 import os from "node:os"
 import path from "node:path"
 import { inflateRawSync, zstdDecompressSync } from "node:zlib"
-import { writePrivate } from "./paths.mjs"
+import { writePrivate } from "./paths.ts"
+import type { PickedBrowser } from "./types.ts"
 
 export const APOSTATE_REPO = "heretic-tech/apostate"
 // Pinned so a download is reproducible and verifiable. The GitHub API is asked first for the
@@ -35,7 +36,7 @@ const DISABLED = new Set(["0", "off", "false", "no", "none", "disabled"])
 
 // The persona Apostate should present: a Windows/macOS/Linux identity independent of the host.
 // Defaults to the host's own OS (fonts and metrics line up), overridable for a fixed persona.
-export function personaFor(platform = process.platform, env = process.env) {
+export function personaFor(platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): string {
   const own = String(env.MUSE_WEB_FINGERPRINT_PLATFORM || "").trim().toLowerCase()
   if (own === "windows" || own === "win") return "windows"
   if (own === "macos" || own === "darwin" || own === "mac") return "macos"
@@ -46,18 +47,18 @@ export function personaFor(platform = process.platform, env = process.env) {
 }
 
 // The flags Apostate reads to hold a stable persona. A non-Apostate browser ignores them.
-export function fingerprintArgs({ seed, platform = process.platform, env = process.env }) {
+export function fingerprintArgs({ seed, platform = process.platform, env = process.env }: { seed: string | number; platform?: string; env?: NodeJS.ProcessEnv }): string[] {
   return [`--fingerprint=${seed}`, `--fingerprint-platform=${personaFor(platform, env)}`]
 }
 
 // Only Apostate takes the fingerprint flags; a plain Chrome/Chromium must launch untouched.
-export function isFingerprintBrowser(executable) {
+export function isFingerprintBrowser(executable: unknown): boolean {
   return /apostate/i.test(String(executable || ""))
 }
 
 // A persona seed that stays the same across restarts, so the browser keeps one machine identity.
 // Apostate's seed is an integer; a random 31-bit value is stable enough and hard to fingerprint.
-export function stableFingerprintSeed(dir) {
+export function stableFingerprintSeed(dir: string): string {
   const file = path.join(dir, "fingerprint.json")
   try {
     const got = JSON.parse(readFileSync(file, "utf8"))
@@ -76,9 +77,9 @@ const EXT_RE = /\.(zip|tar\.zst|tzst|tgz|tar\.gz|tar|dmg)$/i
 // The one release asset for this host: right OS token, right arch token, a decompressible suffix.
 // Release "assets" are the shapes GitHub's API returns ({name, browser_download_url, size}) or a
 // plain [{name, url}] list.
-export function pickReleaseAsset(assets, platform = process.platform, arch = process.arch) {
-  const os = OS_TOKENS[platform]
-  const cpu = ARCH_TOKENS[arch]
+export function pickReleaseAsset(assets: any, platform: string = process.platform, arch: string = process.arch): any | null {
+  const os = (OS_TOKENS as Record<string, string[]>)[platform]
+  const cpu = (ARCH_TOKENS as Record<string, string[]>)[arch]
   if (!os || !cpu) return null
   for (const asset of assets || []) {
     const name = String(asset?.name || asset?.browser_download_url || asset?.url || "").toLowerCase()
@@ -90,13 +91,13 @@ export function pickReleaseAsset(assets, platform = process.platform, arch = pro
   return null
 }
 
-export function verifySha256(data, expectedHex) {
+export function verifySha256(data: Buffer | Uint8Array, expectedHex: unknown): boolean {
   const want = String(expectedHex || "").trim().toLowerCase()
   if (!/^[0-9a-f]{64}$/.test(want)) return false
   return createHash("sha256").update(data).digest("hex") === want
 }
 
-function baseName(p) {
+function baseName(p: unknown): string {
   return path.basename(String(p || "")).toLowerCase()
 }
 
@@ -104,9 +105,9 @@ function baseName(p) {
 // app bundle's Contents/MacOS/Chromium, Linux a plain chrome binary (all under a folder named
 // after the build). Files are checked before directories and shallower paths first, so the top-
 // level binary wins over anything in a helper bundle.
-export function findExecutable(root, platform = process.platform) {
+export function findExecutable(root: string, platform: string = process.platform): string | null {
   if (!root) return null
-  const wanted = (file) => {
+  const wanted = (file: string): boolean => {
     const base = baseName(file)
     if (platform === "win32") return base === "chrome.exe" || /^apostate.*\.exe$/.test(base)
     if (platform === "darwin") {
@@ -116,11 +117,11 @@ export function findExecutable(root, platform = process.platform) {
     }
     return base === "chrome" || base === "apostate"
   }
-  let stat
+  let stat: any
   try { stat = statSync(root) } catch { return null }
   if (!stat.isDirectory()) return wanted(root) ? root : null
-  const walk = (dir, depth) => {
-    let entries
+  const walk = (dir: string, depth: number): string | null => {
+    let entries: any[] | null
     try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return null }
     for (const e of entries) if (e.isFile()) { const f = path.join(dir, e.name); if (wanted(f)) return f }
     if (depth <= 0) return null
@@ -130,7 +131,7 @@ export function findExecutable(root, platform = process.platform) {
   return walk(root, 8)
 }
 
-export function readInstall(dir) {
+export function readInstall(dir: string): any | null {
   if (!dir) return null
   try {
     const got = JSON.parse(readFileSync(path.join(dir, "browsers", "apostate", "install.json"), "utf8"))
@@ -140,14 +141,14 @@ export function readInstall(dir) {
   }
 }
 
-export function writeInstall(dir, info) {
+export function writeInstall(dir: string, info: any) {
   writePrivate(path.join(dir, "browsers", "apostate", "install.json"), JSON.stringify(info, null, 2) + "\n")
 }
 
 // Everywhere a fingerprint browser could already be: the exact path someone configured, our own
 // earlier download, and the cache folders the Apostate npm/pip packages and manual installs leave.
-export function fingerprintCandidates(env = process.env, platform = process.platform, dir = "") {
-  const out = []
+export function fingerprintCandidates(env: NodeJS.ProcessEnv = process.env, platform: string = process.platform, dir = ""): string[] {
+  const out: string[] = []
   const own = String(env.MUSE_WEB_FINGERPRINT_BROWSER || "").trim()
   if (own) out.push(own)
   if (dir) {
@@ -157,7 +158,7 @@ export function fingerprintCandidates(env = process.env, platform = process.plat
     if (found) out.push(found)
   }
   const home = env.HOME || env.USERPROFILE || os.homedir()
-  const roots = []
+  const roots: string[] = []
   if (platform === "win32") {
     if (env.LOCALAPPDATA) roots.push(path.join(env.LOCALAPPDATA, "apostate"), path.join(env.LOCALAPPDATA, "Apostate"))
     if (env.APPDATA) roots.push(path.join(env.APPDATA, "apostate"))
@@ -173,11 +174,11 @@ export function fingerprintCandidates(env = process.env, platform = process.plat
   return [...new Set(out)]
 }
 
-export function findFingerprintBrowser(env = process.env, platform = process.platform, exists = fsExists, dir = "") {
+export function findFingerprintBrowser(env: NodeJS.ProcessEnv = process.env, platform: string = process.platform, exists: (p: string) => boolean = fsExists, dir = ""): string | null {
   return fingerprintCandidates(env, platform, dir).find((p) => p && exists(p)) ?? null
 }
 
-export function installedFingerprintExecutable({ env = process.env, platform = process.platform, exists = fsExists, dir = "" } = {}) {
+export function installedFingerprintExecutable({ env = process.env, platform = process.platform, exists = fsExists, dir = "" }: { env?: NodeJS.ProcessEnv; platform?: string; exists?: (p: string) => boolean; dir?: string } = {}): string | null {
   return findFingerprintBrowser(env, platform, exists, dir)
 }
 
@@ -190,7 +191,7 @@ const Z64_EOCD_SIG = 0x06064b50
 const Z64_LOC_SIG = 0x07064b50
 
 // Refuse names that would escape the destination: absolute paths and any ".." segment.
-function safeJoin(root, name) {
+function safeJoin(root: string, name: unknown): string | null {
   const norm = path.normalize(String(name).replace(/^([/\\])+/, ""))
   if (!norm || norm.split(/[\\/]/).includes("..")) return null
   const full = path.join(root, norm)
@@ -202,7 +203,7 @@ function safeJoin(root, name) {
 // A ZIP reader good enough for a Chromium build: stored and deflated entries, ZIP64 sizes.
 // Returns the number of files written. Used for the Windows/macOS .zip and as the fallback when
 // no system tar can read a zip.
-export function extractZip(buffer, destDir, log = () => {}) {
+export function extractZip(buffer: Buffer | Uint8Array, destDir: string, log: (msg: string) => void = () => {}): number {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)
   let eocd = -1
   const stop = Math.max(0, buf.length - 22 - 0xffff)
@@ -281,20 +282,20 @@ function runTar(args) {
 // Extract whichever archive the release shipped: .zip, .tar.zst, .tar.gz. The system bsdtar
 // reads zip and (with libzstd) tar.zst; Node's zstd fills in on Linux where GNU tar would need
 // an external zstd, and the built-in ZIP reader is the last resort.
-export function extractArchive(file, destDir, log = () => {}) {
+export function extractArchive(file: string, destDir: string, log: (msg: string) => void = () => {}): boolean {
   const lower = String(file).toLowerCase()
   mkdirSync(destDir, { recursive: true })
   if (lower.endsWith(".zip")) {
     if (runTar(["-xf", file, "-C", destDir])) return true
     log("zip: tar 解压失败，改用内置解压")
-    try { extractZip(readFileSync(file), destDir, log); return true } catch (err) { log(`zip: 内置解压失败（${err.message}）`); return false }
+    try { extractZip(readFileSync(file), destDir, log); return true } catch (err: any) { log(`zip: 内置解压失败（${err.message}）`); return false }
   }
   if (lower.endsWith(".tar.zst") || lower.endsWith(".tzst")) {
     const out = file.replace(/\.(tar\.zst|tzst)$/i, ".tar")
     try {
       writeFileSync(out, zstdDecompressSync(readFileSync(file)))
       return runTar(["-xf", out, "-C", destDir])
-    } catch (err) {
+    } catch (err: any) {
       log(`tar.zst: 解压失败（${err.message}）`)
       return false
     } finally {
@@ -311,16 +312,16 @@ export function extractArchive(file, destDir, log = () => {}) {
 
 const RELEASE_API = `https://api.github.com/repos/${APOSTATE_REPO}/releases`
 
-function assetKey(platform, arch) {
+function assetKey(platform: string, arch: string): string {
   const cpu = arch === "arm64" ? "arm64" : arch === "x64" ? "x64" : String(arch || "")
   return `${platform}-${cpu}`
 }
 
-async function readManifestSha(fetchImpl, url) {
+async function readManifestSha(fetchImpl: typeof fetch, url: string): Promise<string> {
   try {
     const res = await fetchImpl(`${url}.manifest.json`, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) return ""
-    const body = await res.json()
+    const body = await res.json() as any
     const sha = String(body?.sha256 || "").toLowerCase()
     return /^[0-9a-f]{64}$/.test(sha) ? sha : ""
   } catch {
@@ -331,20 +332,26 @@ async function readManifestSha(fetchImpl, url) {
 // The asset to download: from the GitHub API when reachable, else the pinned name/URL. The
 // expected sha256 comes from the pinned table when the name matches, otherwise from the release's
 // own ".manifest.json" beside the archive.
-async function resolveAsset({ fetchImpl, version, platform, arch, log }) {
+async function resolveAsset({ fetchImpl, version, platform, arch, log }: {
+  fetchImpl: typeof fetch
+  version: string
+  platform: string
+  arch: string
+  log: (msg: string) => void
+}): Promise<any | null> {
   const pinMatches = String(version).replace(/^v/, "") === APOSTATE_PIN.version
   const pinned = pinMatches ? APOSTATE_PIN.assets[assetKey(platform, arch)] || null : null
-  let assets = []
+  let assets: any[] = []
   try {
     const res = await fetchImpl(`${RELEASE_API}/tags/v${String(version).replace(/^v/, "")}`, {
       headers: { accept: "application/vnd.github+json", "user-agent": "magpie-muse-web" },
       signal: AbortSignal.timeout(20_000),
     })
     if (res.ok) {
-      const body = await res.json()
+      const body = await res.json() as any
       assets = Array.isArray(body?.assets) ? body.assets : []
     }
-  } catch (err) {
+  } catch (err: any) {
     log(`指纹浏览器：GitHub API 不可用（${err?.message || err}），改用固定版本的下载地址`)
   }
   const chosen = pickReleaseAsset(assets, platform, arch)
@@ -363,7 +370,7 @@ async function resolveAsset({ fetchImpl, version, platform, arch, log }) {
   return null
 }
 
-async function downloadTo(fetchImpl, url, file) {
+async function downloadTo(fetchImpl: typeof fetch, url: string, file: string): Promise<number> {
   const res = await fetchImpl(url, { redirect: "follow", signal: AbortSignal.timeout(30 * 60_000) })
   if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`)
   const buf = Buffer.from(await res.arrayBuffer())
@@ -374,12 +381,12 @@ async function downloadTo(fetchImpl, url, file) {
 
 // One installer at a time across engines sharing the data dir. A lock older than 10 minutes is a
 // crashed run; a second engine waits for the first to finish instead of downloading twice.
-function acquireInstallLock(root, now, log) {
+function acquireInstallLock(root: string, now: () => number, log: (msg: string) => void) {
   const file = path.join(root, "install.lock")
   for (let i = 0; i < 2; i++) {
     try {
       return openSync(file, "wx", 0o600)
-    } catch (err) {
+    } catch (err: any) {
       if (err.code !== "EEXIST") throw err
       let age = 0
       try { age = now() - statSync(file).mtimeMs } catch { age = 0 }
@@ -394,12 +401,12 @@ function acquireInstallLock(root, now, log) {
   return null
 }
 
-async function waitForInstall(root, exists, platform, ms) {
+async function waitForInstall(root: string, exists: (p: string) => boolean, platform: string, ms: number): Promise<string | null> {
   const end = Date.now() + ms
   while (Date.now() < end) {
     const found = findExecutable(path.join(root, "current"), platform)
     if (found && exists(found)) return found
-    await new Promise((r) => setTimeout(r, 1500))
+    await new Promise<void>((r) => setTimeout(r, 1500))
   }
   return null
 }
@@ -407,6 +414,18 @@ async function waitForInstall(root, exists, platform, ms) {
 // The engine's browser resolver: reuse a local Apostate if there is one, otherwise download and
 // install the pinned release, caching it under <dir>/browsers/apostate. Returns
 // {executable, extraArgs, source, version} or null (caller falls back to a system Chrome/Edge).
+export interface EnsureOptions {
+  dir?: string
+  env?: NodeJS.ProcessEnv
+  platform?: string
+  arch?: string
+  log?: (msg: string) => void
+  fetchImpl?: typeof fetch
+  allowDownload?: boolean
+  exists?: (p: string) => boolean
+  now?: () => number
+}
+
 export async function ensureFingerprintBrowser({
   dir,
   env = process.env,
@@ -417,13 +436,13 @@ export async function ensureFingerprintBrowser({
   allowDownload = true,
   exists = fsExists,
   now = Date.now,
-} = {}) {
+}: EnsureOptions = {}): Promise<PickedBrowser | null> {
   if (!dir) return null
   if (DISABLED.has(String(env.MUSE_WEB_FINGERPRINT || "").trim().toLowerCase())) {
     log("指纹浏览器：MUSE_WEB_FINGERPRINT 已关闭，改用系统中的 Chromium")
     return null
   }
-  const decorate = (executable, source, version = "") => ({
+  const decorate = (executable: string, source: string, version = ""): PickedBrowser => ({
     executable,
     extraArgs: isFingerprintBrowser(executable) ? fingerprintArgs({ seed: stableFingerprintSeed(dir), platform, env }) : [],
     source,
@@ -453,7 +472,7 @@ export async function ensureFingerprintBrowser({
   let asset
   try {
     asset = await resolveAsset({ fetchImpl, version, platform, arch, log })
-  } catch (err) {
+  } catch (err: any) {
     log(`指纹浏览器：解析下载地址失败（${err?.message || err}）`)
     asset = null
   }
@@ -512,7 +531,7 @@ export async function ensureFingerprintBrowser({
     try { rmSync(downloadFile, { force: true }) } catch {}
     log(`指纹浏览器：已安装到 ${finalExe}`)
     return decorate(finalExe, "downloaded", version)
-  } catch (err) {
+  } catch (err: any) {
     if (staging) try { rmSync(staging, { recursive: true, force: true }) } catch {}
     if (downloadFile) try { rmSync(downloadFile, { force: true }) } catch {}
     log(`指纹浏览器：下载或安装失败，改用系统中的 Chromium（${err?.message || err}）`)

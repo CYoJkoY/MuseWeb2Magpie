@@ -28,21 +28,21 @@ function handleOf(auth) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-function engineHeaders(key, handle) {
-  const headers = {}
+function engineHeaders(key: string, handle: string): Record<string, string> {
+  const headers: Record<string, string> = {}
   if (handle) headers["x-muse-account"] = handle
   if (key) headers.authorization = `Bearer ${key}`
   return headers
 }
 
-function structured(windows) {
+function structured(windows: any): any[] {
   if (!Array.isArray(windows)) return []
   return windows.filter((item) => {
     return item && typeof item.name === "string" && item.name.trim() !== "" && typeof item.used === "number" && item.used >= 0 && item.used <= 100
   })
 }
 
-export const MuseWebConnectorPlugin = async (_input, options) => {
+export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}) => {
   const opt = options && typeof options === "object" ? options : {}
   const engineOrigin = () => originFrom(opt.engine || process.env.MUSE_WEB_ENGINE || DEFAULT_ENGINE)
   const engineBaseURL = () => `${engineOrigin()}/v1`
@@ -67,7 +67,7 @@ export const MuseWebConnectorPlugin = async (_input, options) => {
   async function engineLogin() {
     const res = await control("/v1/login", "POST", "")
     if (!res?.ok) throw res ? new Error(`muse-web 引擎没有开始登录（HTTP ${res.status}）`) : unreachable()
-    const { id, url } = await res.json()
+    const { id, url } = await res.json() as any
     return {
       url,
       instructions: "在弹出的浏览器窗口里登录 muse.ai。登录后窗口会自动关闭，引擎再发一条测试消息，账号能回答才算登录成功。",
@@ -79,7 +79,7 @@ export const MuseWebConnectorPlugin = async (_input, options) => {
           const poll = await control(`/v1/login/${id}`, "GET", "")
           if (!poll) continue
           if (!poll.ok) return { type: "failed", error: `muse-web 登录状态读不到（HTTP ${poll.status}）` }
-          const state = await poll.json()
+          const state = await poll.json() as any
           if (state.status === "done") {
             const expires = Number.isFinite(state.expires) ? state.expires : Date.now() + 86_400_000
             return {
@@ -138,7 +138,7 @@ export const MuseWebConnectorPlugin = async (_input, options) => {
         if (!res) throw unreachable()
         if (res.status === 401) throw Object.assign(new Error("session refused"), { signIn: "expired" })
         if (!res.ok) throw new Error("session refresh unavailable")
-        const body = await res.json()
+        const body = await res.json() as any
         const expires = Number.isFinite(body.expires)
           ? body.expires
           : Number.isFinite(auth?.expires) && auth.expires > Date.now()
@@ -152,7 +152,7 @@ export const MuseWebConnectorPlugin = async (_input, options) => {
         const res = await control("/v1/usage", "GET", handle)
         if (!res) return { error: "engine unreachable" }
         if (res.status === 401) return { error: "session refused", signIn: "expired" }
-        let body = {}
+        let body: any = {}
         try {
           body = await res.json()
         } catch {

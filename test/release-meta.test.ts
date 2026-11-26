@@ -6,7 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
-const tool = path.join(root, "tools", "release-meta.mjs")
+const tool = path.join(root, "tools", "release-meta.ts")
 const { version } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
 
 test("release notes are the changelog section of the packaged version", () => {

@@ -1,11 +1,12 @@
 import { test } from "node:test"
+// @ts-nocheck
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { browserCandidates, browserOptions, findBrowser, launchBrowser, sweepProfiles } from "../engine/browser.mjs"
-import { Muse } from "../engine/muse.mjs"
+import { browserCandidates, browserOptions, findBrowser, launchBrowser, sweepProfiles } from "../engine/browser.ts"
+import { Muse } from "../engine/muse.ts"
 
 const executable = findBrowser()
 
@@ -76,7 +77,7 @@ test("a browser left in the legacy profile cannot block a new engine", { skip: !
 
 test("leftover temporary profiles are removed unless a live browser holds them", { skip: process.platform === "win32" && "symlinks need extra rights on Windows" }, async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "mw-sweep-"))
-  const profile = (name, pid) => {
+  const profile = (name: string, pid = 0) => {
     const dir = path.join(root, name)
     mkdirSync(path.join(dir, "Default"), { recursive: true })
     if (pid) symlinkSync(`${os.hostname()}-${pid}`, path.join(dir, "SingletonLock"))
@@ -104,7 +105,7 @@ test("a browser that exits during start reports its exit code and stderr", { ski
   try {
     await assert.rejects(
       launchBrowser({ executable: fake, profileDir: path.join(root, "browser"), temporary: true, waitMs: 5000 }),
-      (err) => {
+      (err: any) => {
         assert.match(err.message, /exited during start \(code 7\)/)
         assert.match(err.message, /no usable display/)
         return true

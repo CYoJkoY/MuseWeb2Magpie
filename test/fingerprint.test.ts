@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -12,7 +13,7 @@ import {
   fingerprintArgs,
   pickReleaseAsset,
   verifySha256,
-} from "../engine/fingerprint.mjs"
+} from "../engine/fingerprint.ts"
 
 const assets = [
   { name: "apostate-0.5.1-windows-x64.zip", browser_download_url: "https://example/win.zip", size: 10 },

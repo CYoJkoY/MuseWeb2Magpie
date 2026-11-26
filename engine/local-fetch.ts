@@ -8,7 +8,7 @@ import { Readable } from "node:stream"
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"])
 
-export function isLoopbackUrl(value) {
+export function isLoopbackUrl(value: unknown): boolean {
   try {
     return LOOPBACK.has(new URL(String(value)).hostname)
   } catch {
@@ -16,15 +16,15 @@ export function isLoopbackUrl(value) {
   }
 }
 
-function abortError(signal) {
+function abortError(signal: any) {
   if (signal?.reason instanceof Error) return signal.reason
   return Object.assign(new Error("This operation was aborted"), { name: "AbortError" })
 }
 
-export function localFetch(input, init = {}) {
+export function localFetch(input: any, init: any = {}): Promise<Response> {
   const url = input instanceof URL ? input : new URL(String(input))
   const lib = url.protocol === "https:" ? https : http
-  const headers = {}
+  const headers: Record<string, string> = {}
   const given = new Headers(init.headers)
   for (const [name, value] of given) headers[name] = value
   if (!("accept-encoding" in headers)) headers["accept-encoding"] = "identity"
@@ -55,6 +55,6 @@ export function localFetch(input, init = {}) {
 }
 
 // Same signature as fetch, unless the request is loopback: then no proxy is involved.
-export function anyFetch(input, init) {
+export function anyFetch(input: any, init?: any): Promise<Response> {
   return isLoopbackUrl(input) ? localFetch(input, init) : fetch(input, init)
 }
