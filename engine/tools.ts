@@ -56,6 +56,12 @@ export function toolChoiceRequired(tools: any, toolChoice: any): string {
   return ""
 }
 
+// Whether a reply's parsed calls satisfy the tool_choice the client asked for.
+export function toolChoiceSatisfied(required: string, calls: { name: string }[]): boolean {
+  if (required === "required") return calls.length > 0
+  return !required || calls.some((call) => call.name === required)
+}
+
 // The protocol appended to a whole conversation; "" when there are no tools or tool_choice is "none".
 export function toolsPrompt(tools: any, toolChoice: any): string {
   const list = functions(tools)
