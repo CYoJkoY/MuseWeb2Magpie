@@ -76,6 +76,30 @@ export function expiryMs(exp: ExpiryMap = {}): number | null {
   return vals.length ? Math.min(...vals) * 1000 : null
 }
 
+// One Storage.setCookies entry: a cookie placed under both the host and its dot-domain, which is
+// what muse.ai accepts for either form. The whole list goes in one call, so creating a context or
+// renewing a session costs a single CDP round trip instead of two per cookie.
+export interface CookieSpec {
+  name: string
+  value: string
+  domain: string
+  path: string
+  secure: boolean
+  expires: number
+}
+
+export function cookieSpecs(host: string, secure: boolean, cookies: Cookies = {}, expires: ExpiryMap = {}, nowMs = Date.now()): CookieSpec[] {
+  const now = nowMs / 1000
+  const out: CookieSpec[] = []
+  for (const [name, value] of Object.entries(cookies || {})) {
+    if (!value) continue
+    const e = Number(expires?.[name])
+    const at = Number.isFinite(e) && e > now + 3600 ? e : now + 7 * 86400
+    for (const domain of [`.${host}`, host]) out.push({ name, value, domain, path: "/", secure, expires: at })
+  }
+  return out
+}
+
 // A readable name for the account from /api/session, when muse.ai sends one. Never a cookie.
 export function labelOf(body: any): string {
   for (const src of [body, body?.user, body?.account, body?.profile]) {
@@ -702,18 +726,14 @@ export class Muse {
   }
 
   async setCookies(browser, contextId, cookies, expires) {
-    const now = Date.now() / 1000
-    const secure = this.site.startsWith("https:")
-    for (const [name, value] of Object.entries(cookies || {})) {
-      if (!value) continue
-      const e = Number(expires?.[name])
-      const at = Number.isFinite(e) && e > now + 3600 ? e : now + 7 * 86400
-      for (const domain of [`.${this.host}`, this.host]) {
-        await browser.send("Storage.setCookies", {
-          browserContextId: contextId,
-          cookies: [{ name, value, domain, path: "/", secure, expires: at }],
-        }).catch(() => {})
-      }
+    const specs = cookieSpecs(this.host, this.site.startsWith("https:"), cookies, expires)
+    if (!specs.length) return
+    // One call places every cookie. If the browser refuses the batch, place them one by one so a
+    // single malformed cookie does not cost the whole sign-in.
+    const rejected = await browser.send("Storage.setCookies", { browserContextId: contextId, cookies: specs }).then(() => false, () => true)
+    if (!rejected) return
+    for (const spec of specs) {
+      await browser.send("Storage.setCookies", { browserContextId: contextId, cookies: [spec] }).catch(() => {})
     }
   }
 
@@ -910,8 +930,8 @@ export class Muse {
   }
 
   async send(page, prompt) {
-    await page.js(`(function(){var c=document.querySelector(${JSON.stringify(COMPOSER_SEL)});if(c){c.scrollIntoView({block:'center',inline:'nearest'});c.focus();}})()`).catch(() => {})
-    const rect = await page.js(`(function(){var c=document.querySelector(${JSON.stringify(COMPOSER_SEL)});if(!c)return null;var r=c.getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)});})()`)
+    // Focus, scroll and measure in one evaluate: a single CDP round trip before typing.
+    const rect = await page.js(`(function(){var c=document.querySelector(${JSON.stringify(COMPOSER_SEL)});if(!c)return null;try{c.scrollIntoView({block:'center',inline:'nearest'});c.focus();}catch(e){}var r=c.getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)});})()`)
     if (!rect) throw new GenerationError("找不到聊天输入框")
     const c = JSON.parse(rect)
     for (const type of ["mousePressed", "mouseReleased"]) {
