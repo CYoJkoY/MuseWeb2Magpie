@@ -10,7 +10,7 @@ import os from "node:os"
 import path from "node:path"
 import { browserArgs, findBrowser } from "../engine/browser.ts"
 import { noDesktop } from "../engine/login.ts"
-import { ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, usageCard } from "../engine/muse.ts"
+import { cookieSpecs, ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, usageCard } from "../engine/muse.ts"
 import { parseToolCalls, toolChoiceRequired, toolChoiceSatisfied, toolsPrompt } from "../engine/tools.ts"
 import { VERSION } from "../engine/version.ts"
 import { parseScutil, parseWinProxy, resolveProxy } from "../engine/net.ts"
@@ -249,6 +249,25 @@ describe("pure parts", () => {
     assert.deepEqual(cookies, { hatch_vml: "v", a: "b" })
     assert.equal(exp.hatch_vml, 1100)
     assert.equal(expiryMs(exp), 1_100_000)
+  })
+
+  test("cookies: one batch places every cookie under both the host and its dot-domain", () => {
+    const now = 1_000_000_000_000
+    const soon = Math.floor(now / 1000) + 60
+    const later = Math.floor(now / 1000) + 30 * 86400
+    const specs = cookieSpecs("muse.ai", true, { hatch_sess: "s", hatch_vml: "v", empty: "" }, { hatch_sess: soon, hatch_vml: later }, now)
+    assert.equal(specs.length, 4)
+    const placed = (name: string, domain: string) => `${name}@${domain}`
+    assert.deepEqual(specs.map((s) => placed(s.name, s.domain)), [
+      placed("hatch_sess", ".muse.ai"),
+      placed("hatch_sess", "muse.ai"),
+      placed("hatch_vml", ".muse.ai"),
+      placed("hatch_vml", "muse.ai"),
+    ])
+    assert.deepEqual(specs[0], { name: "hatch_sess", value: "s", domain: ".muse.ai", path: "/", secure: true, expires: now / 1000 + 7 * 86400 })
+    assert.equal(specs[2].expires, later)
+    assert.equal(specs[2].secure, true)
+    assert.deepEqual(cookieSpecs("muse.ai", false, {}, {}, now), [])
   })
 
   test("account label: a name muse.ai sends; the version matches the package", () => {
