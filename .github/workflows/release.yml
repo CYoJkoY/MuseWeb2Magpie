@@ -36,13 +36,33 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: engine-go/go.mod
+          cache: false
+
+      - name: Install dev dependencies
+        run: npm ci --no-audit --no-fund
+
       - name: Check the tag matches package.json and take the changelog section
         run: |
           set -euo pipefail
           node tools/release-meta.ts "$TAG" | tee notes.md
 
       - name: Tests
-        run: npm test
+        run: |
+          npm run typecheck
+          npm run no-javascript
+          go -C engine-go vet ./...
+          npm run test:go
+          npm test
+
+      - name: Build native engines
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" npm run build:engine
+          done
 
       - name: Pack the plugin
         run: |

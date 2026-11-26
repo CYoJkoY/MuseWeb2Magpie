@@ -18,6 +18,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: engine-go/go.mod
+          cache: false
       - name: Install dev dependencies
         run: npm install --no-audit --no-fund
       - name: Type check
@@ -26,3 +30,7 @@ jobs:
         run: npm run no-javascript
       - name: Tests
         run: npm test
+      - name: Go checks
+        run: |
+          go -C engine-go vet ./...
+          npm run test:go
