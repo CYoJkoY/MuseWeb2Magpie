@@ -2,9 +2,10 @@ import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { once } from "node:events"
 import { readFileSync } from "node:fs"
+import type { AddressInfo } from "node:net"
 import test from "node:test"
 
-import { MuseWebPlugin } from "./index.mjs"
+import { MuseWebPlugin } from "./index.ts"
 
 function listen() {
   const seen = []
@@ -95,17 +96,17 @@ async function boot() {
   const fake = listen()
   fake.server.listen(0, "127.0.0.1")
   await once(fake.server, "listening")
-  const { port } = fake.server.address()
+  const { port } = fake.server.address() as AddressInfo
   process.env.MUSE_WEB_ENGINE = `http://127.0.0.1:${port}`
   process.env.MUSE_WEB_ENGINE_KEY = "engine-test-key"
-  const hooks = await MuseWebPlugin()
+  const hooks = await MuseWebPlugin({})
   const loaded = await hooks.auth.loader(async () => ({ type: "api", key: "acct-handle-1" }))
   return {
     ...fake,
     hooks,
     loaded,
     url: `http://127.0.0.1:${port}/v1/chat/completions`,
-    close: () => new Promise((resolve, reject) => fake.server.close((err) => err ? reject(err) : resolve())),
+    close: () => new Promise<void>((resolve, reject) => fake.server.close((err) => err ? reject(err) : resolve())),
   }
 }
 
@@ -151,7 +152,7 @@ test("401 is marked expired and 429 stays an OpenAI error", async () => {
     assert.equal(denied.status, 401)
     assert.equal(denied.headers.get("x-magpie-sign-in"), "expired")
     assert.equal(denied.headers.has("content-length"), false)
-    const deniedBody = await denied.json()
+    const deniedBody = await denied.json() as any
     assert.equal(deniedBody.error.type, "authentication_error")
 
     await fx.setMode("429")
@@ -162,7 +163,7 @@ test("401 is marked expired and 429 stays an OpenAI error", async () => {
     })
     assert.equal(busy.status, 429)
     assert.equal(busy.headers.get("x-magpie-sign-in"), null)
-    const busyBody = await busy.json()
+    const busyBody = await busy.json() as any
     assert.equal(busyBody.error.message, "account busy")
     assert.equal(busyBody.error.type, "rate_limit_error")
   } finally {
@@ -171,7 +172,7 @@ test("401 is marked expired and 429 stays an OpenAI error", async () => {
 })
 
 test("chat.headers ignores other providers", async () => {
-  const hooks = await MuseWebPlugin()
+  const hooks = await MuseWebPlugin({})
   const output = { headers: {} }
   await hooks["chat.headers"]({ sessionID: "sess-9", model: { providerID: "openai" } }, output)
   assert.deepEqual(output.headers, {})
@@ -193,7 +194,7 @@ test("refresh exchanges only expiry and a refusal expires the sign-in", async ()
     await fx.setMode("401")
     await assert.rejects(
       () => fx.hooks.auth.refresh({ type: "api", key: "acct-handle-1" }),
-      (err) => err.signIn === "expired" && err.message === "session refused",
+    (err: any) => err.signIn === "expired" && err.message === "session refused",
     )
   } finally {
     await fx.close()
@@ -205,8 +206,8 @@ test("usage returns an error instead of a made-up window", async () => {
   try {
     const missing = await fx.hooks.auth.usage(async () => ({ type: "api", key: "acct-handle-1" }))
     assert.deepEqual(missing, { error: "no structured quota" })
-    assert.equal(missing.windows, undefined)
-    assert.equal(missing.signIn, undefined)
+    assert.equal((missing as any).windows, undefined)
+    assert.equal((missing as any).signIn, undefined)
     const hit = fx.seen.at(-1)
     assert.equal(hit.url, "/v1/usage")
     assert.equal(hit.account, "acct-handle-1")
@@ -231,7 +232,7 @@ test("api and oauth logins both name the account", async () => {
 test("the chosen browser goes to the engine with the sign-in request", async () => {
   const fx = await boot()
   try {
-    const oauth = fx.hooks.auth.methods.find((m) => m.type === "oauth")
+    const oauth: any = fx.hooks.auth.methods.find((m) => m.type === "oauth")
     // An engine on another machine owns its browser list, so this plugin does not offer one.
     assert.equal(oauth.prompts, undefined)
     const chosen = "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"
@@ -267,7 +268,7 @@ test("the usage card shows the account the engine describes, without inventing a
 })
 
 test("config describes the model and keeps what the user configured", async () => {
-  const hooks = await MuseWebPlugin()
+  const hooks = await MuseWebPlugin({})
   const cfg = { provider: { "muse-web": { name: "我的 Muse", models: { extra: { name: "Extra" } } } } }
   await hooks.config(cfg)
   const p = cfg.provider["muse-web"]
@@ -290,7 +291,7 @@ test("an unreachable engine is an error, not an expired sign-in", async () => {
   assert.deepEqual(usage, { error: "engine unreachable" })
   await assert.rejects(
     () => fx.hooks.auth.refresh({ type: "api", key: "acct-handle-1" }),
-    (err) => err.message === "engine unreachable" && err.signIn === undefined,
+    (err: any) => err.message === "engine unreachable" && err.signIn === undefined,
   )
 })
 

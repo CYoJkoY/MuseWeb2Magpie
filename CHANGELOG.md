@@ -1,5 +1,13 @@
 # 更新记录
 
+## 0.9.0 · 2026-11-27
+
+- 变更：源码从 JavaScript 全量迁移到 TypeScript。插件、引擎、connector 与测试都改为 `.ts`，仓库里不再有 `.js` / `.mjs` 源文件，`npm run no-javascript` 会在 CI 里把住这道门。
+- 变更：直接由 Node 运行 `.ts`（原生类型擦除），不再需要构建步骤；`engines.node` 提高到 `>=22.18`。
+- 新增：`npm run typecheck`（`tsc --noEmit`），源码与测试都在类型检查内；CI 三平台先跑类型检查和 no-JavaScript 守卫，再跑测试。
+- 新增：`engine/types.ts` 收拢共享类型，引擎、插件与 connector 共用同一套账号、额度与对话结构。
+- 版本：0.9.0。
+
 ## 0.8.0 · 2026-11-26
 
 - 新增：默认浏览器改为开源指纹浏览器 [Apostate](https://github.com/heretic-tech/apostate)。本机已有就复用；没有时引擎启动时自动下载一次固定版本（带 sha256 校验）到数据目录，失败或设 `MUSE_WEB_FINGERPRINT=0` 时改用本机 Chrome、Edge、Chromium 或 Brave。`MUSE_WEB_FINGERPRINT_BROWSER`、`MUSE_WEB_FINGERPRINT_VERSION` 和 `MUSE_WEB_FINGERPRINT_PLATFORM` 可控制复用路径、版本和指纹平台。
@@ -51,7 +59,7 @@
 ## 0.5.7 · 2026-11-05
 
 - 修复：工具调用解析过宽，模型解释或引用 `{"name":"shell",...}` 时会被当成真实调用执行，引用内容还会从回复里消失（[#8](https://github.com/JohnWangggg/magpie-muse-web/issues/8)）。现在只执行明确的 `<tool_call>`、`tool_call` 代码块，或整段回复就是该 JSON / 带 `tool_call` 标签的 JSON；正文里引用的 JSON 保持文本。
-- 修复：引擎以 detached 方式启动后不会随 Magpie 退出，关掉 Magpie 后仍在后台每 30 分钟续期、唤醒账号虚拟机（[#9](https://github.com/JohnWangggg/magpie-muse-web/issues/9)）。插件现在把 Magpie 的 pid 传给引擎，父进程消失后引擎自行退出；手动运行 `node engine/main.mjs` 不受影响。
+- 修复：引擎以 detached 方式启动后不会随 Magpie 退出，关掉 Magpie 后仍在后台每 30 分钟续期、唤醒账号虚拟机（[#9](https://github.com/JohnWangggg/magpie-muse-web/issues/9)）。插件现在把 Magpie 的 pid 传给引擎，父进程消失后引擎自行退出；手动运行 `node engine/main.ts` 不受影响。
 
 ## 0.5.6 · 2026-11-03
 

@@ -5,11 +5,13 @@
 // The reply is read as rendered: outside a code block markdown eats backslashes, asterisks and
 // anything shaped like an HTML tag, so a call written there arrives broken.
 
+import type { ParsedCall, ToolFunction } from "./types.ts"
+
 const ARGS_IN_HISTORY = 1500
 
 // [{name, description, parameters}] from Chat Completions tools ({type:"function", function})
 // and Responses-style ones ({type:"function", name, parameters}). Other kinds are left out.
-export function functions(tools) {
+export function functions(tools: any): ToolFunction[] {
   if (!Array.isArray(tools)) return []
   return tools
     .map((t) => (t && typeof t === "object" ? (t.function && typeof t.function === "object" ? t.function : t) : null))
@@ -18,33 +20,34 @@ export function functions(tools) {
 }
 
 // The function tool_choice names, "none", "required", or "" (the model decides).
-function choice(toolChoice) {
+function choice(toolChoice: any): string {
   if (toolChoice === "none" || toolChoice === "required") return toolChoice
   if (toolChoice && typeof toolChoice === "object") return toolChoice.function?.name || toolChoice.name || ""
   return ""
 }
 
-function typeOf(spec) {
+function typeOf(spec: any): string {
   if (!spec || typeof spec !== "object") return "any"
   if (Array.isArray(spec.enum)) return spec.enum.map((v) => JSON.stringify(v)).join(" | ")
   if (spec.type === "array") return `array<${typeOf(spec.items)}>`
   return Array.isArray(spec.type) ? spec.type.join(" | ") : spec.type || (spec.properties ? "object" : "any")
 }
 
-function params(schema, indent = "   ") {
+function params(schema: any, indent = "   "): string {
   const props = schema && typeof schema === "object" ? schema.properties : null
   if (!props || !Object.keys(props).length) return `${indent}（无参数）`
   const required = new Set(Array.isArray(schema.required) ? schema.required : [])
-  return Object.entries(props).map(([name, spec]) => {
+  return Object.entries(props).map(([name, specRaw]) => {
+    const spec = specRaw as any
     const desc = spec && typeof spec === "object" && spec.description ? ` ${String(spec.description).trim()}` : ""
     const line = `${indent}- ${name} (${typeOf(spec)}, ${required.has(name) ? "必填" : "可选"})${desc}`
-    const inner = spec?.type === "object" ? spec : spec?.type === "array" && spec.items?.type === "object" ? spec.items : null
+    const inner: any = spec?.type === "object" ? spec : spec?.type === "array" && spec.items?.type === "object" ? spec.items : null
     return inner?.properties ? `${line}\n${params(inner, indent + "  ")}` : line
   }).join("\n")
 }
 
 // "required", a specific tool name, or "" when the model may answer with text.
-export function toolChoiceRequired(tools, toolChoice) {
+export function toolChoiceRequired(tools: any, toolChoice: any): string {
   const list = functions(tools)
   if (!list.length) return ""
   const pick = choice(toolChoice)
@@ -54,7 +57,7 @@ export function toolChoiceRequired(tools, toolChoice) {
 }
 
 // The protocol appended to a whole conversation; "" when there are no tools or tool_choice is "none".
-export function toolsPrompt(tools, toolChoice) {
+export function toolsPrompt(tools: any, toolChoice: any): string {
   const list = functions(tools)
   const pick = choice(toolChoice)
   if (!list.length || pick === "none") return ""
@@ -81,7 +84,7 @@ export function toolsPrompt(tools, toolChoice) {
 export const TOOLS_REMINDER = "（用户电脑上的操作仍然用 tool_call 代码块请求客户端执行。）"
 
 // An assistant turn's tool calls as the code blocks the model is asked to write.
-export function callsAsText(toolCalls) {
+export function callsAsText(toolCalls: any[]): string {
   return toolCalls.map((c) => {
     const name = c?.function?.name || c?.name || ""
     let args = c?.function?.arguments ?? c?.arguments ?? "{}"
@@ -96,7 +99,7 @@ const FENCE = /```([A-Za-z_]*)[ \t]*([\s\S]*?)```/g
 // A code block the page rendered without its fences keeps the language label on its own line.
 const LABEL = /(?:^|\n)[ \t]*tool_call[ \t]*\r?\n[ \t]*/g
 
-function asCall(obj, names, requireArgs = false) {
+function asCall(obj: any, names: Set<string>, requireArgs = false): ParsedCall | null {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null
   const fn = obj.function && typeof obj.function === "object" ? obj.function : null
   const name = obj.name || obj.tool || fn?.name
@@ -114,7 +117,7 @@ function asCall(obj, names, requireArgs = false) {
   return { name, arguments: JSON.stringify(args) }
 }
 
-function parseJSON(raw) {
+function parseJSON(raw: string): any {
   const body = raw.trim().replace(/^```(?:tool_call|json|JSON)?\s*/, "").replace(/\s*```$/, "")
   try {
     return JSON.parse(body)
@@ -127,9 +130,9 @@ function parseJSON(raw) {
 // A reply that quotes a tool-shaped JSON while explaining something is text, not a call: tags and
 // ```tool_call fences are explicit, while ```json and bare JSON count only when the whole reply is
 // that block (or a rendered tool_call label stands right before it).
-export function parseToolCalls(text, tools) {
+export function parseToolCalls(text: string, tools: any): { calls: ParsedCall[]; content: string } {
   const names = new Set(functions(tools).map((f) => f.name))
-  const calls = []
+  const calls: ParsedCall[] = []
   let content = text
   for (const m of text.matchAll(TAG)) {
     const parsed = parseJSON(m[1])
@@ -177,6 +180,6 @@ export function parseToolCalls(text, tools) {
 }
 
 // A rendered code block leaves its language label and copy button behind as lines of their own.
-export function stripLabels(text) {
+export function stripLabels(text: string): string {
   return text.replace(/^[ \t]*(?:tool_call|json|JSON|复制|复制代码|Copy|Copy code)[ \t]*(?:\n|$)/gm, "")
 }

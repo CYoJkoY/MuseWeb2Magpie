@@ -1,12 +1,26 @@
 // Minimal Chrome DevTools Protocol client over the runtime's own WebSocket (Bun, Node ≥ 22).
 // Ported from muse2api's cdp.py (MIT, MUSE2API Authors).
-import { anyFetch } from "./local-fetch.mjs"
+import { anyFetch } from "./local-fetch.ts"
 
 export class CDPError extends Error {}
 
+type Waiter = {
+  resolve: (value: any) => void
+  reject: (reason: any) => void
+  timer: ReturnType<typeof setTimeout>
+  method: string
+}
+
 export class CDP {
-  static connect(url, { timeoutMs = 90_000 } = {}) {
-    return new Promise((resolve, reject) => {
+  ws: WebSocket
+  timeoutMs: number
+  nextId: number
+  pending: Map<number, Waiter>
+  closed: boolean
+  closers: Array<() => void>
+
+  static connect(url: string, { timeoutMs = 90_000 }: { timeoutMs?: number } = {}): Promise<CDP> {
+    return new Promise<CDP>((resolve, reject) => {
       const ws = new WebSocket(url)
       const timer = setTimeout(() => {
         ws.close()
@@ -23,7 +37,7 @@ export class CDP {
     })
   }
 
-  constructor(ws, timeoutMs) {
+  constructor(ws: WebSocket, timeoutMs: number) {
     this.ws = ws
     this.timeoutMs = timeoutMs
     this.nextId = 0
@@ -55,7 +69,7 @@ export class CDP {
     })
   }
 
-  send(method, params = {}, timeoutMs = this.timeoutMs) {
+  send(method: string, params: any = {}, timeoutMs: number = this.timeoutMs): Promise<any> {
     if (this.closed) return Promise.reject(new CDPError(`${method}: connection closed`))
     const id = ++this.nextId
     return new Promise((resolve, reject) => {
@@ -68,13 +82,13 @@ export class CDP {
     })
   }
 
-  async js(expression, { awaitPromise = false, timeoutMs } = {}) {
+  async js(expression: string, { awaitPromise = false, timeoutMs }: { awaitPromise?: boolean; timeoutMs?: number } = {}): Promise<any> {
     const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise }, timeoutMs)
     return r.result && "value" in r.result ? r.result.value : undefined
   }
 
   // Called once when the socket goes away, whoever closed it.
-  onClose(fn) {
+  onClose(fn: () => void) {
     if (this.closed) fn()
     else this.closers.push(fn)
   }
@@ -87,7 +101,7 @@ export class CDP {
   }
 }
 
-export async function httpJSON(url, timeoutMs = 5000) {
+export async function httpJSON(url: string, timeoutMs = 5000): Promise<any> {
   const res = await anyFetch(url, { signal: AbortSignal.timeout(timeoutMs) })
   return res.json()
 }

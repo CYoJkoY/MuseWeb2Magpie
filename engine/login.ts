@@ -6,23 +6,60 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
-import { launchBrowser } from "./browser.mjs"
-import { CDP } from "./cdp.mjs"
-import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.mjs"
-import { anyFetch } from "./local-fetch.mjs"
-import { AuthError, ESSENTIAL, renewSession } from "./muse.mjs"
+import { launchBrowser } from "./browser.ts"
+import { CDP } from "./cdp.ts"
+import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.ts"
+import { anyFetch } from "./local-fetch.ts"
+import { AuthError, ESSENTIAL, renewSession } from "./muse.ts"
+import type { Cookies, ExpiryMap, SavedAccount } from "./types.ts"
+
+type LoginRun = {
+  status: string
+  step?: string
+  note?: string
+  handle?: string
+  expires?: number | null
+  label?: string
+  error?: string
+  stop?: () => void
+  [key: string]: any
+}
 
 // A sign-in window needs a desktop. Linux servers and SSH sessions often have none.
-export function noDesktop(platform = process.platform, env = process.env) {
+export function noDesktop(platform = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
   return platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY
 }
 
 export class Logins {
-  constructor({ site, executable, resolveExecutable, dir, proxy = "", fetchImpl = fetch, everyMs = 2000, limitMs = 15 * 60_000, headless = false, onDone }) {
+  site: string
+  host: string
+  executable: string | undefined
+  resolveExecutable: (() => Promise<any>) | undefined
+  dir: string
+  proxy: string
+  fetchImpl: typeof fetch
+  everyMs: number
+  limitMs: number
+  headless: boolean
+  onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string) => Promise<SavedAccount>
+  runs: Map<string, LoginRun>
+
+  constructor({ site, executable, resolveExecutable, dir, proxy = "", fetchImpl = fetch, everyMs = 2000, limitMs = 15 * 60_000, headless = false, onDone }: {
+    site: string
+    executable?: string
+    resolveExecutable?: () => Promise<any>
+    dir: string
+    proxy?: string
+    fetchImpl?: typeof fetch
+    everyMs?: number
+    limitMs?: number
+    headless?: boolean
+    onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string) => Promise<SavedAccount>
+  }) {
     this.site = site.replace(/\/+$/, "")
     this.host = new URL(this.site).hostname
     Object.assign(this, { executable, resolveExecutable, dir, proxy, fetchImpl, everyMs, limitMs, headless, onDone })
-    this.runs = new Map() // id → {status, step, handle?, expires?, error?, stop?}
+    this.runs = new Map<string, LoginRun>() // id → {status, step, handle?, expires?, error?, stop?}
   }
 
   // Closes every sign-in window still open, e.g. when the engine stops.
@@ -30,8 +67,8 @@ export class Logins {
     for (const run of this.runs.values()) run.stop?.()
   }
 
-  async openChat(port) {
-    const list = await anyFetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json())
+  async openChat(port: number) {
+    const list = await anyFetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json() as Promise<any[]>)
     const tab = list.find((t) => t.type === "page")
     if (!tab) return
     const page = await CDP.connect(tab.webSocketDebuggerUrl)
@@ -42,10 +79,10 @@ export class Logins {
     }
   }
 
-  async start(browser = "") {
+  async start(browser = ""): Promise<string> {
     const id = randomBytes(9).toString("base64url")
     const profileDir = path.join(this.dir, id)
-    const run = { status: "starting" }
+    const run: LoginRun = { status: "starting" }
     this.runs.set(id, run)
     let stopped = false
     run.stop = () => {
@@ -68,20 +105,20 @@ export class Logins {
     // browser, which takes longer than the plugin waits for this HTTP answer. Give the id back
     // now and open the window as soon as the browser is ready; the status poll reports the rest.
     run.step = "正在准备浏览器，第一次使用会先下载开源指纹浏览器"
-    this.launch(run, chosen, profileDir, () => stopped).catch((err) => {
+    this.launch(run, chosen, profileDir, () => stopped).catch((err: any) => {
       if (run.status !== "failed") Object.assign(run, { status: "failed", error: `打不开浏览器: ${err.message}` })
     })
     return id
   }
 
-  async launch(run, chosen, profileDir, wasStopped) {
+  async launch(run: LoginRun, chosen: string, profileDir: string, wasStopped: () => boolean) {
     // The engine's resolver picks (or downloads) the fingerprint browser; without one, the
     // executable the engine was started with, which is what older versions used directly.
-    let resolved = null
+    let resolved: any = null
     if (!chosen) {
       try {
         resolved = this.resolveExecutable ? await this.resolveExecutable() : null
-      } catch (err) {
+      } catch (err: any) {
         Object.assign(run, { status: "failed", error: `没准备好浏览器: ${err.message}` })
         return
       }
@@ -104,7 +141,7 @@ export class Logins {
     let opened
     try {
       opened = await launchBrowser({ executable, extraArgs, profileDir, headless: this.headless, proxy: this.proxy, url: `${this.site}/` })
-    } catch (err) {
+    } catch (err: any) {
       Object.assign(run, { status: "failed", error: `打不开浏览器: ${err.message}` })
       return
     }
@@ -125,7 +162,7 @@ export class Logins {
       clearInterval(timer)
       opened.close().then(() => rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 })).catch(() => {})
     }
-    const finish = (fields) => {
+    const finish = (fields: Partial<LoginRun>) => {
       if (run.status !== "pending") return
       Object.assign(run, fields)
       close()
@@ -155,11 +192,11 @@ export class Logins {
           try {
             const saved = await this.onDone(renewed.cookies, renewed.cookies_exp, renewed.label, renewed.vm)
             finish({ status: "done", handle: saved.handle, expires: saved.expires, label: saved.label })
-          } catch (err) {
+          } catch (err: any) {
             finish({ status: "failed", error: err.message })
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         if (!(err instanceof AuthError)) run.note = err.message
       } finally {
         busy = false
@@ -167,9 +204,9 @@ export class Logins {
     }, this.everyMs)
   }
 
-  async cookies(browser) {
-    const { cookies = [] } = await browser.send("Storage.getCookies", {})
-    const out = { cookies: {}, exp: {} }
+  async cookies(browser: any): Promise<{ cookies: Cookies; exp: ExpiryMap }> {
+    const { cookies = [] } = await browser.send("Storage.getCookies", {}) as { cookies?: any[] }
+    const out: { cookies: Cookies; exp: ExpiryMap } = { cookies: {}, exp: {} }
     for (const c of cookies) {
       const domain = String(c.domain || "").replace(/^\./, "")
       if (domain !== this.host && !this.host.endsWith(`.${domain}`)) continue
@@ -179,7 +216,7 @@ export class Logins {
     return out
   }
 
-  status(id) {
+  status(id: string): any {
     const run = this.runs.get(id)
     if (!run) return null
     const { status, step, note, handle, expires, label, error } = run

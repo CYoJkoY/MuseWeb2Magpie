@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Engine tests. The browser part drives a real headless Chrome/Edge against a loopback fake
 // muse.ai and is skipped when no such browser is installed. Runs under `node --test` and `bun test`.
 import { after, before, describe, test } from "node:test"
@@ -6,18 +7,18 @@ import { mkdtempSync, rmSync, statSync } from "node:fs"
 import { readFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { browserArgs, findBrowser, freePort } from "../engine/browser.mjs"
-import { Logins, noDesktop } from "../engine/login.mjs"
-import { ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, usageCard } from "../engine/muse.mjs"
-import { parseToolCalls, toolChoiceRequired, toolsPrompt } from "../engine/tools.mjs"
-import { VERSION } from "../engine/version.mjs"
-import { parseScutil, parseWinProxy, resolveProxy } from "../engine/net.mjs"
-import { parentAlive, watchParent } from "../engine/parent.mjs"
-import { dataDir, engineKey } from "../engine/paths.mjs"
-import { buildPrompt } from "../engine/prompt.mjs"
-import { createServer } from "../engine/server.mjs"
-import { Store } from "../engine/store.mjs"
-import { goodCookies, startFakeMuse } from "./fake-muse.mjs"
+import { browserArgs, findBrowser, freePort } from "../engine/browser.ts"
+import { Logins, noDesktop } from "../engine/login.ts"
+import { ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, usageCard } from "../engine/muse.ts"
+import { parseToolCalls, toolChoiceRequired, toolsPrompt } from "../engine/tools.ts"
+import { VERSION } from "../engine/version.ts"
+import { parseScutil, parseWinProxy, resolveProxy } from "../engine/net.ts"
+import { parentAlive, watchParent } from "../engine/parent.ts"
+import { dataDir, engineKey } from "../engine/paths.ts"
+import { buildPrompt } from "../engine/prompt.ts"
+import { createServer } from "../engine/server.ts"
+import { Store } from "../engine/store.ts"
+import { goodCookies, startFakeMuse } from "./fake-muse.ts"
 
 describe("pure parts", () => {
   test("prompt: a lone user message goes as is; history becomes labelled blocks", () => {

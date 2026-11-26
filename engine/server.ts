@@ -2,11 +2,12 @@
 // chat SSE · 401 sign-in expired · 429 account busy · 503 engine trouble.
 import http from "node:http"
 import { randomUUID, timingSafeEqual } from "node:crypto"
-import { AuthError, expiryMs, PromptTooLongError, QuotaError, redact, renewSession } from "./muse.mjs"
-import { buildPrompt, PromptError } from "./prompt.mjs"
-import { functions, parseToolCalls, stripLabels, TOOLS_REMINDER, toolChoiceRequired, toolsPrompt } from "./tools.mjs"
+import { AuthError, expiryMs, PromptTooLongError, QuotaError, redact, renewSession } from "./muse.ts"
+import type { ChatTiming } from "./muse.ts"
+import { buildPrompt, PromptError } from "./prompt.ts"
+import { functions, parseToolCalls, stripLabels, TOOLS_REMINDER, toolChoiceRequired, toolsPrompt } from "./tools.ts"
 
-import { VERSION } from "./version.mjs"
+import { VERSION } from "./version.ts"
 
 export { VERSION }
 const MODEL = "muse-spark"
@@ -14,7 +15,10 @@ const USAGE_STALE_MS = 30 * 60_000
 const USAGE_AFTER_CHAT_MS = 2 * 60_000
 
 class HttpError extends Error {
-  constructor(status, message, code = "", retryAfter = 0) {
+  status: number
+  code: string
+  retryAfter: number
+  constructor(status: number, message: string, code = "", retryAfter = 0) {
     super(message)
     this.status = status
     this.code = code
@@ -22,25 +26,25 @@ class HttpError extends Error {
   }
 }
 
-function same(a, b) {
+function same(a: string, b: string) {
   const x = Buffer.from(String(a))
   const y = Buffer.from(String(b))
   return x.length === y.length && timingSafeEqual(x, y)
 }
 
-function json(res, status, body) {
+function json(res: http.ServerResponse, status: number, body: any) {
   const data = JSON.stringify(body)
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(data) })
   res.end(data)
 }
 
-function fail(res, status, message, { code = "", retryAfter = 0 } = {}) {
+function fail(res: http.ServerResponse, status: number, message: string, { code = "", retryAfter = 0 }: { code?: string; retryAfter?: number } = {}) {
   const type = status === 401 ? "authentication_error"
     : status === 429 ? "rate_limit_error"
     : status >= 400 && status < 500 ? "invalid_request_error"
     : "engine_error"
   const data = JSON.stringify({ error: { message: redact(message), type, ...(code ? { code } : {}) } })
-  const headers = { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(data) }
+  const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8", "content-length": String(Buffer.byteLength(data)) }
   if (retryAfter > 0) headers["retry-after"] = String(Math.max(1, Math.ceil(retryAfter)))
   res.writeHead(status, headers)
   res.end(data)
@@ -48,7 +52,7 @@ function fail(res, status, message, { code = "", retryAfter = 0 } = {}) {
 
 // A GenerationError's message is the only thing the page gave us; turn it into a code the
 // gateway and the agent can act on (retry now, wait for the VM, or re-sign-in).
-function generationCode(err) {
+function generationCode(err: any): [string, number] {
   const text = String(err?.message || "")
   if (/预热|warming/i.test(text)) return ["vm_warming", 10]
   if (/页面|page|加载/i.test(text)) return ["page_unavailable", 10]
@@ -57,8 +61,8 @@ function generationCode(err) {
   return ["engine_unavailable", 5]
 }
 
-async function body(req, limit = 8 << 20) {
-  const chunks = []
+async function body(req: http.IncomingMessage, limit = 8 << 20): Promise<any> {
+  const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
@@ -73,9 +77,9 @@ async function body(req, limit = 8 << 20) {
   }
 }
 
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
+const esc = (s: any) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" } as Record<string, string>)[c])
 
-function loginPage(state) {
+function loginPage(state: any) {
   const done = state?.status === "done"
   const failed = state?.status === "failed" || !state
   const title = done ? "登录完成" : failed ? "登录没有完成" : "请到另一个浏览器窗口登录 muse.ai"
@@ -97,7 +101,9 @@ p{margin:0;opacity:.75}
 </style></head><body><main><h1><span class="dot"></span>${title}</h1><p>${note}</p></main></body></html>`
 }
 
-export function createServer({ muse, logins, store, key, port = 18611, log = () => {}, onActivity = () => {}, onShutdown = () => {}, readUsage = (a, maxAgeMs) => muse.readUsage(a, { maxAgeMs }).catch(() => null), site = muse?.site }) {
+type Meta = { account: string; session: string; reason: string; timing: string; tools?: string }
+
+export function createServer({ muse, logins, store, key, port = 18611, log = (line: string) => {}, onActivity = () => {}, onShutdown = () => {}, readUsage = (a: any, maxAgeMs?: number) => muse.readUsage(a, { maxAgeMs }).catch(() => null), site = muse?.site }: any): http.Server {
   const busy = new Set()
 
   function authorize(req) {
@@ -134,7 +140,7 @@ export function createServer({ muse, logins, store, key, port = 18611, log = () 
     meta.session = session
     // Each conversation has its own tab; the engine knows whether that tab already holds it.
     const continuing = !!(session && prompt.turns > 1)
-    const timing = {}
+    const timing: ChatTiming = {}
     const stream = payload.stream !== false
     const id = `chatcmpl-${randomUUID()}`
     const created = Math.floor(Date.now() / 1000)
@@ -213,7 +219,7 @@ export function createServer({ muse, logins, store, key, port = 18611, log = () 
       const finish = toolCalls.length ? "tool_calls" : "stop"
       if (toolNote) meta.tools = `${functions(payload.tools).length}→${toolCalls.map((c) => c.function.name).join(",") || "text"}`
       if (!stream) {
-        const message = { role: "assistant", content: toolCalls.length ? content || null : whole }
+        const message: any = { role: "assistant", content: toolCalls.length ? content || null : whole }
         if (toolCalls.length) message.tool_calls = toolCalls
         json(res, 200, { id, object: "chat.completion", created, model: MODEL, choices: [{ index: 0, message, finish_reason: finish }] })
         return
@@ -339,7 +345,7 @@ export function createServer({ muse, logins, store, key, port = 18611, log = () 
     const t0 = Date.now()
     onActivity()
     const url = new URL(req.url, "http://127.0.0.1")
-    const meta = { account: "", session: "", reason: "", timing: "" }
+    const meta: Meta = { account: "", session: "", reason: "", timing: "" }
     try {
       const route = routes[`${req.method} ${url.pathname}`]
       let m

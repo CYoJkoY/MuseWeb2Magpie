@@ -6,14 +6,14 @@ const ENV_NAMES = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "al
 
 // Chrome reads --proxy-server as host:port after the scheme and rejects a trailing slash
 // (ERR_NO_SUPPORTED_PROXIES). A proxy URL has no path, so drop trailing slashes here, once.
-function asUrl(value) {
+function asUrl(value: unknown): string {
   const v = String(value || "").trim()
   if (!v) return ""
   const url = /^[a-z][\w+.-]*:\/\//i.test(v) ? v : `http://${v}`
   return url.replace(/\/+$/, "")
 }
 
-export function parseScutil(out) {
+export function parseScutil(out: unknown): string {
   const get = (k) => (String(out).match(new RegExp(`\\b${k}\\s*:\\s*(\\S+)`)) || [])[1]
   for (const kind of ["HTTPS", "HTTP"]) {
     if (get(`${kind}Enable`) === "1" && get(`${kind}Proxy`)) return `http://${get(`${kind}Proxy`)}:${get(`${kind}Port`) || 80}`
@@ -23,7 +23,7 @@ export function parseScutil(out) {
 }
 
 // Windows "ProxyServer" is either host:port or "http=h:p;https=h:p;socks=h:p".
-export function parseWinProxy(enable, server) {
+export function parseWinProxy(enable: unknown, server: unknown): string {
   if (!/0x1\b/.test(String(enable)) || !server) return ""
   const s = String(server).trim()
   if (!s.includes("=")) return asUrl(s)
@@ -34,7 +34,7 @@ export function parseWinProxy(enable, server) {
   return ""
 }
 
-export function systemProxy(platform = process.platform, run = execFileSync) {
+export function systemProxy(platform = process.platform, run: typeof execFileSync = execFileSync): string {
   try {
     if (platform === "darwin") return parseScutil(run("scutil", ["--proxy"], { encoding: "utf8", timeout: 3000 }))
     if (platform === "win32") {
@@ -50,7 +50,7 @@ export function systemProxy(platform = process.platform, run = execFileSync) {
 }
 
 // Returns "direct" or a proxy URL.
-export function resolveProxy(env = process.env, platform = process.platform, run = execFileSync) {
+export function resolveProxy(env: NodeJS.ProcessEnv = process.env, platform = process.platform, run: typeof execFileSync = execFileSync): string {
   const own = String(env.MUSE_WEB_PROXY || "").trim()
   if (own) return own === "direct" ? "direct" : asUrl(own)
   for (const name of ENV_NAMES) {
@@ -62,7 +62,8 @@ export function resolveProxy(env = process.env, platform = process.platform, run
 
 // fetch that goes through the same proxy. Bun takes it per request; Node reads it from the
 // environment when started with NODE_USE_ENV_PROXY=1 (the plugin starts the engine that way).
-export function proxiedFetch(proxy, base = globalThis.fetch) {
+export function proxiedFetch(proxy: string, base: typeof fetch = globalThis.fetch): typeof fetch {
   if (!proxy || proxy === "direct" || typeof globalThis.Bun === "undefined") return base
-  return (url, init = {}) => base(url, { ...init, proxy })
+  // Bun takes the proxy per request; the DOM RequestInit type has no such field.
+  return (url, init = {}) => base(url, { ...init, proxy } as RequestInit)
 }

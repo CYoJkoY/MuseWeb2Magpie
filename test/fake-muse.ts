@@ -1,5 +1,6 @@
 // A loopback stand-in for muse.ai: the DOM shapes and /api/session behaviour the engine relies on.
 // Cookie hatch_sess decides who is signed in: "good…" works, anything else is signed out.
+// @ts-nocheck
 import http from "node:http"
 
 const ESSENTIAL = ["hatch_sess", "hatch_gw", "hatch_vml", "hatch_native_auth_device"]

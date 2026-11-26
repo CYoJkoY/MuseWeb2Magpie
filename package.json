@@ -1,12 +1,12 @@
 {
   "name": "magpie-muse-web",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Magpie provider plugin for muse.ai: sign in to each account in a browser window, use Muse Spark with tool calls in Codex, OpenCode and other agents, and see each account's weekly usage",
   "type": "module",
-  "main": "./index.mjs",
-  "exports": "./index.mjs",
+  "main": "./index.ts",
+  "exports": "./index.ts",
   "files": [
-    "index.mjs",
+    "index.ts",
     "engine/",
     "assets/",
     "icon.svg",
@@ -14,7 +14,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=1 contract.test.mjs \"test/*.test.mjs\" connector/contract.test.mjs"
+    "test": "node --test --test-concurrency=1 contract.test.ts \"test/*.test.ts\" connector/contract.test.ts",
+    "typecheck": "tsc --noEmit",
+    "no-javascript": "node tools/no-javascript.ts"
   },
   "keywords": [
     "magpie",
@@ -36,7 +38,7 @@
     "url": "https://github.com/JohnWangggg/magpie-muse-web/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   },
   "os": [
     "darwin",
@@ -49,5 +51,9 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "typescript": "^7.0.2"
   }
 }

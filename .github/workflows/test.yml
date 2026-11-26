@@ -18,5 +18,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund
+      - name: Type check
+        run: npm run typecheck
+      - name: No JavaScript sources
+        run: npm run no-javascript
       - name: Tests
         run: npm test

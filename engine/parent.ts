@@ -2,20 +2,24 @@
 // means the engine outlives Magpie unless it watches the process that started it: the plugin passes
 // MUSE_WEB_PARENT_PID, and an engine started by hand passes nothing and stays independent.
 
-export function parentAlive(pid) {
+export function parentAlive(pid: unknown): boolean {
   const n = Number(pid)
   if (!(Number.isInteger(n) && n > 0)) return true
   try {
     process.kill(n, 0)
     return true
-  } catch (err) {
+  } catch (err: any) {
     // Only ESRCH proves the process is gone. A permission error or an unsupported signal must not
     // make a healthy engine exit.
     return err.code !== "ESRCH"
   }
 }
 
-export function watchParent(pid, gone, { everyMs = 10_000, alive = parentAlive } = {}) {
+export function watchParent(
+  pid: unknown,
+  gone: () => void,
+  { everyMs = 10_000, alive = parentAlive }: { everyMs?: number; alive?: (pid: unknown) => boolean } = {},
+): ReturnType<typeof setInterval> | null {
   const n = Number(pid)
   if (!(Number.isInteger(n) && n > 0) || n === process.pid) return null
   if (!alive(n)) {

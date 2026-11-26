@@ -2,7 +2,7 @@
 // full: system text and every turn, for a page that has none of this conversation yet.
 // last: the final user message, for a page that already holds the earlier turns.
 
-import { callsAsText } from "./tools.mjs"
+import { callsAsText } from "./tools.ts"
 
 export class PromptError extends Error {}
 
@@ -12,7 +12,7 @@ export const MAX_PROMPT_CHARS = 400_000
 export const MAX_TURNS = 80
 const MAX_TURN_CHARS = 120_000
 
-function clip(text, limit) {
+function clip(text: unknown, limit: number): string {
   const value = String(text || "")
   if (value.length <= limit) return value
   return value.slice(0, limit) + "\n…（内容过长，已截断）"
@@ -22,24 +22,25 @@ const TEXT_PARTS = new Set(["text", "input_text", "output_text"])
 // The page takes text only: an image or file is named in place, so the rest of the message still goes.
 const OTHER_PARTS = { image_url: "[图片]", input_image: "[图片]", image: "[图片]", file: "[文件]", input_file: "[文件]", input_audio: "[音频]" }
 
-function text(content) {
+function text(content: unknown): string {
   if (content == null) return ""
   if (typeof content === "string") return content
   if (!Array.isArray(content)) throw new PromptError("unsupported message content")
   return content.map((item) => {
     if (typeof item === "string") return item
     if (!item || typeof item !== "object") throw new PromptError("unsupported message content")
-    const type = item.type || "text"
-    if (TEXT_PARTS.has(type)) return item.text || ""
-    return OTHER_PARTS[type] ?? `[${type}]`
+    const part = item as { type?: string; text?: string }
+    const type = part.type || "text"
+    if (TEXT_PARTS.has(type)) return part.text || ""
+    return (OTHER_PARTS as Record<string, string>)[type] ?? `[${type}]`
   }).join("")
 }
 
-export function buildPrompt(messages, { maxChars = MAX_PROMPT_CHARS, maxTurns = MAX_TURNS } = {}) {
+export function buildPrompt(messages: any[], { maxChars = MAX_PROMPT_CHARS, maxTurns = MAX_TURNS }: { maxChars?: number; maxTurns?: number } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) throw new PromptError("messages is empty")
-  const system = []
-  const turns = []
-  const toolNames = new Map()
+  const system: string[] = []
+  const turns: Array<[string, string]> = []
+  const toolNames = new Map<string, string>()
   for (const message of messages) {
     if (!message || typeof message !== "object") throw new PromptError("unsupported message")
     const role = String(message.role || "").trim().toLowerCase()

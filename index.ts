@@ -2,11 +2,11 @@ import { spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { dataDir, enginePort } from "./engine/paths.mjs"
-import { browserOptions } from "./engine/browser.mjs"
-import { findFingerprintBrowser } from "./engine/fingerprint.mjs"
-import { anyFetch } from "./engine/local-fetch.mjs"
-import { VERSION } from "./engine/version.mjs"
+import { dataDir, enginePort } from "./engine/paths.ts"
+import { browserOptions } from "./engine/browser.ts"
+import { findFingerprintBrowser } from "./engine/fingerprint.ts"
+import { anyFetch } from "./engine/local-fetch.ts"
+import { VERSION } from "./engine/version.ts"
 
 const PROVIDER = "muse-web"
 const MODEL = "muse-spark"
@@ -20,7 +20,7 @@ const REFRESH_LEAD_MS = 10 * 60_000
 const CONTEXT_TOKENS = 128_000
 const OUTPUT_TOKENS = 16_000
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ENGINE_MAIN = path.join(HERE, "engine", "main.mjs")
+const ENGINE_MAIN = path.join(HERE, "engine", "main.ts")
 const ICON = (() => {
   try {
     return `data:image/svg+xml;base64,${readFileSync(path.join(HERE, "icon.svg")).toString("base64")}`
@@ -55,14 +55,14 @@ function handleOf(auth) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-function engineHeaders(key, handle) {
-  const headers = {}
+function engineHeaders(key: string, handle: string): Record<string, string> {
+  const headers: Record<string, string> = {}
   if (handle) headers["x-muse-account"] = handle
   if (key) headers.authorization = `Bearer ${key}`
   return headers
 }
 
-function structured(windows) {
+function structured(windows: any): any[] {
   if (!Array.isArray(windows)) return []
   // One malformed meter should not throw away the valid ones.
   return windows.filter((item) => {
@@ -70,7 +70,7 @@ function structured(windows) {
   })
 }
 
-export const MuseWebPlugin = async (_input, options) => {
+export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
   const opt = options && typeof options === "object" ? options : {}
   // An engine named in options or MUSE_WEB_ENGINE is run by someone else; otherwise the plugin runs its own.
   const external = () => Boolean(opt.engine || process.env.MUSE_WEB_ENGINE)
@@ -87,7 +87,7 @@ export const MuseWebPlugin = async (_input, options) => {
   async function running() {
     try {
       const res = await anyFetch(`${engineOrigin()}/v1/health`, { signal: AbortSignal.timeout(1500) })
-      const body = res.ok ? await res.json() : null
+      const body = res.ok ? await res.json() as any : null
       return body?.engine === "muse-web" ? String(body.version || "?") : ""
     } catch {
       return ""
@@ -138,7 +138,7 @@ export const MuseWebPlugin = async (_input, options) => {
   }
 
   // Returns null when the engine is down or silent, so callers never mistake that for a refused sign-in.
-  async function control(pathname, method, handle, payload) {
+  async function control(pathname: string, method: string, handle: string, payload?: any): Promise<Response | null> {
     if (!(await ensureEngine())) return null
     const headers = engineHeaders(engineKey(), handle)
     if (payload !== undefined) headers["content-type"] = "application/json"
@@ -155,11 +155,11 @@ export const MuseWebPlugin = async (_input, options) => {
     }
   }
 
-  async function browserLogin(inputs = {}) {
+  async function browserLogin(inputs: any = {}) {
     const browser = typeof inputs?.browser === "string" ? inputs.browser.trim() : ""
     const res = await control("/v1/login", "POST", "", browser ? { browser } : undefined)
     if (!res?.ok) throw new Error(res ? `muse-web 引擎没能开始登录（HTTP ${res.status}）` : "muse-web 引擎没有启动；日志在数据目录的 engine.log")
-    const { id, url } = await res.json()
+    const { id, url } = await res.json() as any
     return {
       url,
       instructions: "在弹出的浏览器窗口里登录 muse.ai。第一次使用会先下载开源指纹浏览器 Apostate，窗口会晚一点出现。登录后窗口自动关闭，引擎再发一条测试消息，账号能回答才算登录成功。",
@@ -171,7 +171,7 @@ export const MuseWebPlugin = async (_input, options) => {
           const poll = await control(`/v1/login/${id}`, "GET", "")
           if (!poll) continue
           if (!poll.ok) return { type: "failed", error: `muse-web 登录状态读不到（HTTP ${poll.status}）` }
-          const state = await poll.json()
+          const state = await poll.json() as any
           if (state.status === "done") {
             const expires = Number.isFinite(state.expires) ? state.expires : Date.now() + 86_400_000
             return {
@@ -256,7 +256,7 @@ export const MuseWebPlugin = async (_input, options) => {
         if (!res) throw new Error("engine unreachable")
         if (res.status === 401) throw Object.assign(new Error("session refused"), { signIn: "expired" })
         if (!res.ok) throw new Error("session refresh unavailable")
-        const body = await res.json()
+        const body = await res.json() as any
         // muse.ai does not always expose a cookie expiry. Keep the account usable with the old
         // deadline when it is still in the future, otherwise give it a day and try again later.
         const expires = Number.isFinite(body.expires)
@@ -272,7 +272,7 @@ export const MuseWebPlugin = async (_input, options) => {
         const res = await control("/v1/usage", "GET", handle)
         if (!res) return { error: "engine unreachable" }
         if (res.status === 401) return { error: "session refused", signIn: "expired" }
-        let body = {}
+        let body: any = {}
         try {
           body = await res.json()
         } catch {

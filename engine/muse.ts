@@ -4,8 +4,11 @@
 // _poll_chat and chat_stream. Selectors and timings are kept as muse2api has them, except the
 // first-token wait, raised from 40 s to 90 s after cold starts were measured at 30–47 s.
 import { randomUUID } from "node:crypto"
-import { CDP } from "./cdp.mjs"
-import { launchBrowser } from "./browser.mjs"
+import { CDP } from "./cdp.ts"
+import { launchBrowser } from "./browser.ts"
+import type { Account, Cookies, ExpiryMap, Meter, UsageCard, UsageReading } from "./types.ts"
+
+declare const document: any
 
 // Cookies a sign-in must have before it counts. muse.ai used to add hatch_gw and hatch_vml
 // when the chat page opened; it no longer sends either (#2, #3). Saved when a response
@@ -25,15 +28,15 @@ export class QuotaError extends GenerationError {}
 // The page refused the message as too long before it answered; retry with a smaller history.
 export class PromptTooLongError extends GenerationError {}
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 
-export function cookieHeader(cookies) {
+export function cookieHeader(cookies: Cookies = {}) {
   return Object.entries(cookies || {}).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join("; ")
 }
 
 // Logs and error bodies end up in bug reports. Strip the shapes that carry credentials.
-export function redact(text) {
+export function redact(text: unknown) {
   return String(text ?? "")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
     .replace(/([?&](?:key|token|access_token|refresh_token|api_key)=)[^&\s]+/gi, "$1***")
@@ -41,9 +44,9 @@ export function redact(text) {
 }
 
 // Set-Cookie lines → {cookies, exp} with exp in unix seconds.
-export function parseSetCookies(lines, now = Date.now()) {
-  const cookies = {}
-  const exp = {}
+export function parseSetCookies(lines: string[] = [], now = Date.now()): { cookies: Cookies; exp: ExpiryMap } {
+  const cookies: Cookies = {}
+  const exp: ExpiryMap = {}
   for (const line of lines || []) {
     const [pair, ...attrs] = String(line).split(";")
     const at = pair.indexOf("=")
@@ -66,7 +69,7 @@ export function parseSetCookies(lines, now = Date.now()) {
 }
 
 // The session cookie that decides expiry, in milliseconds; null when unknown.
-export function expiryMs(exp) {
+export function expiryMs(exp: ExpiryMap = {}): number | null {
   const pos = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0)
   if (pos(exp?.hatch_vml)) return pos(exp.hatch_vml) * 1000
   const vals = ESSENTIAL.map((n) => pos(exp?.[n])).filter(Boolean)
@@ -74,7 +77,7 @@ export function expiryMs(exp) {
 }
 
 // A readable name for the account from /api/session, when muse.ai sends one. Never a cookie.
-export function labelOf(body) {
+export function labelOf(body: any): string {
   for (const src of [body, body?.user, body?.account, body?.profile]) {
     if (!src || typeof src !== "object") continue
     for (const k of ["email", "user_email", "username", "display_name", "name"]) {
@@ -85,9 +88,9 @@ export function labelOf(body) {
   return ""
 }
 
-export async function renewSession(site, cookies, expires, { fetchImpl = fetch, wakeVm = true } = {}) {
-  let cur = { ...(cookies || {}) }
-  const exp = { ...(expires || {}) }
+export async function renewSession(site: string, cookies: Cookies, expires: ExpiryMap, { fetchImpl = fetch, wakeVm = true }: { fetchImpl?: typeof fetch; wakeVm?: boolean } = {}): Promise<any> {
+  let cur: Cookies = { ...(cookies || {}) }
+  const exp: ExpiryMap = { ...(expires || {}) }
   const headers = {
     "user-agent": UA,
     origin: site,
@@ -109,7 +112,7 @@ export async function renewSession(site, cookies, expires, { fetchImpl = fetch, 
   const set = parseSetCookies(typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [])
   cur = { ...cur, ...set.cookies }
   Object.assign(exp, set.exp)
-  const failed = (err) => {
+  const failed = (err: any) => {
     err.cookies = cur
     err.cookies_exp = exp
     return err
@@ -158,9 +161,9 @@ export async function renewSession(site, cookies, expires, { fetchImpl = fetch, 
 // Settings → General → Usage, as the page draws it. Each meter is a progressbar whose
 // aria-label names it and whose aria-valuenow is the percent used; the row beside it says when
 // it resets or that it never expires, and what is left. Read by structure, not by language.
-function usageOnPage() {
-  const bars = [...document.querySelectorAll('[role="progressbar"][aria-valuenow]')]
-  return bars.map((bar) => {
+function usageOnPage(): Meter[] {
+  const bars: any[] = [...document.querySelectorAll('[role="progressbar"][aria-valuenow]')]
+  return bars.map((bar: any) => {
     const row = bar.parentElement
     const texts = row ? [...row.querySelectorAll('[data-slot="text"]')].map((e) => (e.innerText || "").replace(/\s+/g, " ").trim()).filter(Boolean) : []
     return { name: bar.getAttribute("aria-label") || texts[0] || "", used: Number(bar.getAttribute("aria-valuenow")), texts }
@@ -169,7 +172,7 @@ function usageOnPage() {
 
 // The settings button is the bottom one of the left rail, a menu that opens on a key press.
 // The server's HTML already has it; it answers only once the page has hydrated.
-function settingsButton() {
+function settingsButton(): boolean {
   const h = document.querySelector("[data-hatch-shell-hydration-state]")
   if (h && h.getAttribute("data-hatch-shell-hydration-state") !== "hydrated") return false
   const r = (e) => e.getBoundingClientRect()
@@ -182,7 +185,7 @@ function settingsButton() {
 
 // In that menu, Settings is the item with the "⌘," / "Ctrl+," shortcut, or the one labelled
 // Settings / 设置 / 設定 when the shortcut is not part of the text.
-export function settingsItem() {
+export function settingsItem(): boolean {
   const items = [...document.querySelectorAll('[role="menuitem"]')]
   const it = items.find((e) => /,\s*$/.test((e.innerText || "").trim())) || items.find((e) => /设置|設定|settings/i.test(e.innerText || ""))
   if (!it) return false
@@ -194,7 +197,7 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 
 // "每周限额将在 10月15日重置" / "Weekly limit resets Oct 15" → that day's local midnight, this
 // year or the next; null when the line names no day.
-export function resetDate(text, now = Date.now()) {
+export function resetDate(text: string, now = Date.now()): number | null {
   const s = String(text || "")
   let m = s.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/)
   let month, day
@@ -209,8 +212,8 @@ export function resetDate(text, now = Date.now()) {
 }
 
 // The page's meters → Magpie's usage windows and plan name.
-export function usageCard(meters, now = Date.now()) {
-  const windows = []
+export function usageCard(meters: Meter[] = [], now = Date.now()): UsageCard {
+  const windows: any[] = []
   let plan = ""
   for (const m of meters || []) {
     const [, note = "", detail = ""] = m.texts || []
@@ -419,7 +422,7 @@ const UNSETTLED_TAIL = /(^|\n)[ \t]*(?:[-*+>#]+|\d+[.)]|`{1,3})?[ \t]*$/
 
 // Chat Completions has no image part here: a picture the page generated goes out as markdown,
 // which is what Magpie and other clients already render. blob: URLs are converted before this.
-export function mediaMarkdown(items) {
+export function mediaMarkdown(items: Array<{ kind?: string; url?: string; src?: string }> = []): string {
   return (items || []).flatMap((m) => {
     const url = String(m?.url || m?.src || "")
     if (!url) return []
@@ -431,7 +434,7 @@ export function mediaMarkdown(items) {
 // page restyles text while it streams (a "-" becomes a list item), so a bubble that no longer
 // starts with what was sent gives only what lies past their common start, and one that shrank
 // gives nothing until it grows past it. final: the reply is done; nothing is held back.
-export function settle(sent, txt, final = false) {
+export function settle(sent: string, txt: string, final = false): { delta: string; sent: string } {
   let t = txt.replace(ZERO_WIDTH, "")
   if (!final) {
     const m = t.match(UNSETTLED_TAIL)
@@ -448,7 +451,48 @@ const USAGE_RETRY_MS = 2 * 60_000
 const VERIFY = "\u0000verify"
 const VERIFY_PROMPT = "这是一条连通测试，请只回复：OK"
 
+export interface MuseOptions {
+  site?: string
+  executable?: string
+  resolveExecutable?: () => Promise<any> | any
+  profileDir: string
+  headless?: boolean
+  hidden?: boolean
+  proxy?: string
+  fetchImpl?: typeof fetch
+  firstTokenMs?: number
+  chatTimeoutMs?: number
+  quietMs?: number
+  shortQuietMs?: number
+  stopQuietMs?: number
+  loadMs?: number
+  onCookies?: (id: string, cookies: Cookies, exp: ExpiryMap, vm: string) => void
+  onLost?: (why: string) => void
+}
+
+export type ChatTiming = { how?: string; sent?: string; tabMs?: number; firstMs?: number; text?: string }
+
 export class Muse {
+  onLost: (why: string) => void
+  site: string
+  host: string
+  executable: string | undefined
+  resolveExecutable: (() => Promise<any> | any) | undefined
+  opts: { profileDir: string; headless: boolean; hidden: boolean; proxy: string }
+  fetchImpl: typeof fetch
+  firstTokenMs: number
+  chatTimeoutMs: number
+  quietMs: number
+  shortQuietMs: number
+  stopQuietMs: number
+  loadMs: number
+  onCookies: (id: string, cookies: Cookies, exp: ExpiryMap, vm: string) => void
+  accounts: Map<string, any>
+  usage: Map<string, UsageReading>
+  reading: Map<string, Promise<UsageReading | null> | Promise<never> | Promise<any>>
+  usageFailed: Map<string, number>
+  started: any
+
   constructor({
     site = "https://muse.ai",
     executable,
@@ -468,7 +512,7 @@ export class Muse {
     loadMs = 30_000,
     onCookies = () => {},
     onLost = () => {},
-  }) {
+  }: MuseOptions) {
     this.onLost = onLost
     this.site = site.replace(/\/+$/, "")
     this.host = new URL(this.site).hostname
@@ -960,7 +1004,7 @@ export class Muse {
   // Yields text deltas for one conversation on the named account. prompt is {full, last}: last
   // is sent only when the conversation continues and the page can go back to its thread.
   // timing, when given, gets tabMs (getting the page ready) and firstMs (send → first text).
-  async *chat(account, prompt, { conversation = "", continuing = false, signal, timing = {}, expectTools = false } = {}) {
+  async *chat(account: Account, prompt: { full: string; last: string; turns?: number }, { conversation = "", continuing = false, signal, timing = {}, expectTools = false }: { conversation?: string; continuing?: boolean; signal?: AbortSignal; timing?: ChatTiming; expectTools?: boolean } = {}): AsyncGenerator<string, void, unknown> {
     const t0 = Date.now()
     timing.how = await this.home(account)
     const a = this.accounts.get(account.id)

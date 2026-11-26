@@ -5,20 +5,20 @@ import path from "node:path"
 
 export const DEFAULT_PORT = 18611
 
-export function dataDir(env = process.env, platform = process.platform, home = os.homedir()) {
+export function dataDir(env: NodeJS.ProcessEnv = process.env, platform = process.platform, home = os.homedir()): string {
   if (env.MUSE_WEB_HOME) return env.MUSE_WEB_HOME
   if (platform === "darwin") return path.posix.join(home, "Library", "Application Support", "muse-web")
   if (platform === "win32") return path.win32.join(env.APPDATA || path.win32.join(home, "AppData", "Roaming"), "muse-web")
   return path.posix.join(env.XDG_DATA_HOME || path.posix.join(home, ".local", "share"), "muse-web")
 }
 
-export function enginePort(env = process.env) {
+export function enginePort(env: NodeJS.ProcessEnv = process.env): number {
   const n = Number(env.MUSE_WEB_ENGINE_PORT)
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT
 }
 
 // Owner-only where the platform has modes; Windows keeps the user profile's own ACL.
-export function writePrivate(file, contents) {
+export function writePrivate(file: string, contents: string) {
   mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
   writeFileSync(tmp, contents, { mode: 0o600 })
@@ -26,7 +26,7 @@ export function writePrivate(file, contents) {
   renameSync(tmp, file)
 }
 
-export function engineKey(dir) {
+export function engineKey(dir: string): string {
   const file = path.join(dir, "engine.key")
   mkdirSync(dir, { recursive: true })
   for (let i = 0; i < 20; i++) {
@@ -45,7 +45,7 @@ export function engineKey(dir) {
       closeSync(fd)
       try { chmodSync(file, 0o600) } catch {}
       return key
-    } catch (err) {
+    } catch (err: any) {
       if (err.code !== "EEXIST") throw err
     }
   }
