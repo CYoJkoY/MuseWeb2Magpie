@@ -248,6 +248,7 @@ func run() error {
 					}
 				}()
 			}
+			enqueued := 0
 			for _, handle := range st.Handles() {
 				acct, ok := st.Get(handle)
 				if !ok {
@@ -255,12 +256,13 @@ func run() error {
 				}
 				select {
 				case accounts <- acct:
+					enqueued++
 				case <-ctx.Done():
 				}
 			}
 			close(accounts)
 			usage.Wait()
-			log.Log("%s prewarm accounts=%d warm=%dms total=%dms", timeString(), st.Count(), warmDone.Sub(startedAt).Milliseconds(), time.Since(startedAt).Milliseconds())
+			log.Log("%s prewarm accounts=%d warm=%dms total=%dms", timeString(), enqueued, warmDone.Sub(startedAt).Milliseconds(), time.Since(startedAt).Milliseconds())
 		}()
 	}
 	err = server.Serve(listener)
