@@ -18,7 +18,11 @@ import (
 	"time"
 )
 
-const version = "0.10.0"
+const version = "0.11.0"
+
+// prewarmUsageParallel caps how many usage reads run at once during cold start. Each read opens
+// its own tab, so a small pool keeps a large saved set from flooding the browser.
+const prewarmUsageParallel = 3
 
 type config struct {
 	dir         string
@@ -212,6 +216,7 @@ func run() error {
 	log.Log("muse-web engine %s listening on http://127.0.0.1:%d · %d accounts · data %s", version, cfg.port, st.Count(), cfg.dir)
 	if cfg.prewarm && st.Count() > 0 {
 		go func() {
+			startedAt := time.Now()
 			var group sync.WaitGroup
 			for _, handle := range st.Handles() {
 				acct, ok := st.Get(handle)
@@ -229,11 +234,35 @@ func run() error {
 				}()
 			}
 			group.Wait()
+			warmDone := time.Now()
+			accounts := make(chan account)
+			var usage sync.WaitGroup
+			for i := 0; i < prewarmUsageParallel; i++ {
+				usage.Add(1)
+				go func() {
+					defer usage.Done()
+					for acct := range accounts {
+						if ctx.Err() == nil {
+							e.readUsage(ctx, acct, 0)
+						}
+					}
+				}()
+			}
+			enqueued := 0
 			for _, handle := range st.Handles() {
-				if acct, ok := st.Get(handle); ok && ctx.Err() == nil {
-					e.readUsage(ctx, acct, 0)
+				acct, ok := st.Get(handle)
+				if !ok {
+					continue
+				}
+				select {
+				case accounts <- acct:
+					enqueued++
+				case <-ctx.Done():
 				}
 			}
+			close(accounts)
+			usage.Wait()
+			log.Log("%s prewarm accounts=%d warm=%dms total=%dms", timeString(), enqueued, warmDone.Sub(startedAt).Milliseconds(), time.Since(startedAt).Milliseconds())
 		}()
 	}
 	err = server.Serve(listener)

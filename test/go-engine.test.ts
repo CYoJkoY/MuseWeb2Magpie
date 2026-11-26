@@ -115,7 +115,7 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
     const health = await jsonOf(await fetch(`${base}/v1/health`))
     assert.equal(health.status, 200)
     assert.equal(health.body.engine, "muse-web")
-    assert.equal(health.body.version, "0.10.0")
+    assert.equal(health.body.version, "0.11.0")
     assert.equal(health.body.accounts, 3)
 
     const denied = await jsonOf(await api("/v1/models", {}, "", "wrong"))

@@ -21,6 +21,21 @@ console.log = console.error
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const now = () => new Date().toTimeString().slice(0, 8)
 
+// How many accounts may read usage at once. Each read opens its own tab, so the pool keeps
+// a large saved set from flooding the browser while still finishing well ahead of a serial loop.
+const USAGE_PARALLEL = 3
+
+async function inBatches<T>(items: T[], limit: number, run: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++]
+      await run(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, () => worker()))
+}
+
 function send(value: unknown) {
   process.stdout.write(JSON.stringify(value) + "\n")
 }
@@ -120,12 +135,15 @@ async function warmOne(account: any) {
 }
 
 async function warm(handles: string[]) {
+  const startedAt = Date.now()
   const ready = await Promise.all(handles.map(async (handle) => {
     const account = await storeRequest("store.get", { handle })
     if (!account) return null
     return (await warmOne(account)) ? account : null
   }))
-  for (const account of ready) if (account) await readUsage(account)
+  const accounts = ready.filter(Boolean) as any[]
+  await inBatches(accounts, USAGE_PARALLEL, (account) => readUsage(account))
+  log(`${now()} warm done accounts=${accounts.length} ${Date.now() - startedAt}ms`)
 }
 
 async function readUsage(account: any, maxAgeMs = 0) {
