@@ -641,6 +641,10 @@ func timingLine(timing map[string]any) string {
 func (e *engine) afterChatUsage(acct account, maxAgeMS int64) {
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
+		// A new chat may already own this account's page; reading usage now would queue behind it.
+		if e.isBusy(acct.ID) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		e.readUsage(ctx, acct, maxAgeMS)
