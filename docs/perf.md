@@ -37,14 +37,15 @@ chat.
 
 ## Measured protocol cost
 
-`go1.27.4`, `windows/amd64`, Intel Core i5-13500H. Three runs each; the table shows the median.
+`go1.27.4`, `windows/amd64`, Intel Core i5-13500H. Three runs each with the default benchtime; the
+table shows the median.
 
 | Benchmark | ns/op | B/op | allocs/op |
 | :--- | ---: | ---: | ---: |
-| `BenchmarkEventDecodeDelta` (one streamed line) | ~840 | 416 | 1 |
-| `BenchmarkEventDecodeFinal` (last line, with a tool call) | ~2,790 | 600 | 8 |
-| `BenchmarkRequestEncodeChat` (chat request) | ~4,170 | 833 | 19 |
-| `BenchmarkStoreGet` (account lookup) | ~320 | 592 | 4 |
+| `BenchmarkEventDecodeDelta` (one streamed line) | ~600 | 416 | 1 |
+| `BenchmarkEventDecodeFinal` (last line, with a tool call) | ~1,610 | 600 | 8 |
+| `BenchmarkRequestEncodeChat` (chat request) | ~2,740 | 833 | 19 |
+| `BenchmarkStoreGet` (account lookup) | ~156 | 592 | 4 |
 
 Reading the numbers:
 
