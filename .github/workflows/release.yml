@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, for example v0.8.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # The tag commit is expected to have passed the three-platform test matrix; this run is the
+    # release gate, so one OS is enough and keeps a tag from waiting on three browsers.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check the tag matches package.json and take the changelog section
+        run: |
+          set -euo pipefail
+          node tools/release-meta.mjs "$TAG" | tee notes.md
+
+      - name: Tests
+        run: npm test
+
+      - name: Pack the plugin
+        run: |
+          set -euo pipefail
+          npm pack
+          version="$(node -p "require('./package.json').version")"
+          echo "TGZ=magpie-muse-web-${version}.tgz" >> "$GITHUB_ENV"
+
+      - name: Publish the GitHub release
+        run: |
+          set -euo pipefail
+          assets=("$TGZ" assets/icon.png assets/icon.ico)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" "${assets[@]}" --title "$TAG" --notes-file notes.md --verify-tag
+          fi
+
+      - name: Show what was published
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json url,assets --jq '"\(.url)", (.assets[] | "  \(.name) \(.size) bytes")'

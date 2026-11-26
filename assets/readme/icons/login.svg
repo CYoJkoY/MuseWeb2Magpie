@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="login-title login-desc">
+  <title id="login-title">Login</title>
+  <desc id="login-desc">A browser window with a key.</desc>
+  <style>svg{color:#8A4E2E}@media (prefers-color-scheme:dark){svg{color:#C78E5C}}</style>
+  <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2"/>
+    <path d="M3.5 8.5h17"/>
+    <circle cx="9.5" cy="14.5" r="1.9"/>
+    <path d="M11.4 14.5h5"/>
+  </g>
+</svg>

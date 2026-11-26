@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="trouble-title trouble-desc">
+  <title id="trouble-title">Troubleshooting</title>
+  <desc id="trouble-desc">A lifebuoy ring with spokes.</desc>
+  <style>svg{color:#8A4E2E}@media (prefers-color-scheme:dark){svg{color:#C78E5C}}</style>
+  <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="8"/>
+    <circle cx="12" cy="12" r="3.1"/>
+    <path d="M6.4 6.4l3.6 3.6M17.6 6.4l-3.6 3.6M6.4 17.6l3.6-3.6M17.6 17.6l-3.6-3.6"/>
+  </g>
+</svg>

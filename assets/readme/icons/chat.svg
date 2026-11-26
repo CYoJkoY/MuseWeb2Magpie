@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="chat-title chat-desc">
+  <title id="chat-title">Chat and streaming</title>
+  <desc id="chat-desc">A speech bubble with two lines of text.</desc>
+  <style>svg{color:#8A4E2E}@media (prefers-color-scheme:dark){svg{color:#C78E5C}}</style>
+  <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 5.5h15v10h-8.6L6 19v-3.5H4.5z"/>
+    <path d="M8 9.5h8M8 12.5h5"/>
+  </g>
+</svg>

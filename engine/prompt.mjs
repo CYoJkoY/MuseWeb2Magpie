@@ -1,0 +1,94 @@
+// An OpenAI messages array → the text typed into the web page.
+// full: system text and every turn, for a page that has none of this conversation yet.
+// last: the final user message, for a page that already holds the earlier turns.
+
+import { callsAsText } from "./tools.mjs"
+
+export class PromptError extends Error {}
+
+// The page has no documented context limit. Keep the prompt well under the 128K tokens the model
+// declares (roughly 4 chars per token), and keep each single turn from swallowing the whole budget.
+export const MAX_PROMPT_CHARS = 400_000
+export const MAX_TURNS = 80
+const MAX_TURN_CHARS = 120_000
+
+function clip(text, limit) {
+  const value = String(text || "")
+  if (value.length <= limit) return value
+  return value.slice(0, limit) + "\n…（内容过长，已截断）"
+}
+
+const TEXT_PARTS = new Set(["text", "input_text", "output_text"])
+// The page takes text only: an image or file is named in place, so the rest of the message still goes.
+const OTHER_PARTS = { image_url: "[图片]", input_image: "[图片]", image: "[图片]", file: "[文件]", input_file: "[文件]", input_audio: "[音频]" }
+
+function text(content) {
+  if (content == null) return ""
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) throw new PromptError("unsupported message content")
+  return content.map((item) => {
+    if (typeof item === "string") return item
+    if (!item || typeof item !== "object") throw new PromptError("unsupported message content")
+    const type = item.type || "text"
+    if (TEXT_PARTS.has(type)) return item.text || ""
+    return OTHER_PARTS[type] ?? `[${type}]`
+  }).join("")
+}
+
+export function buildPrompt(messages, { maxChars = MAX_PROMPT_CHARS, maxTurns = MAX_TURNS } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) throw new PromptError("messages is empty")
+  const system = []
+  const turns = []
+  const toolNames = new Map()
+  for (const message of messages) {
+    if (!message || typeof message !== "object") throw new PromptError("unsupported message")
+    const role = String(message.role || "").trim().toLowerCase()
+    let body = text(message.content).trim()
+    // The page has no tools: calls are written as the tags the model is asked for, results as text.
+    if (role === "tool") {
+      const name = toolNames.get(message.tool_call_id)
+      // An empty result is still a result. Dropping it leaves the history ending on the assistant's
+      // tool call, so the engine resends the whole transcript and the model repeats itself (#7).
+      turns.push(["user", `【工具执行结果${name ? `：${name}` : ""}】\n${body || "（无输出）"}`])
+      continue
+    }
+    if (role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+      for (const c of message.tool_calls) if (c?.id) toolNames.set(c.id, c.function?.name || c.name || "")
+      body = [body, callsAsText(message.tool_calls)].filter(Boolean).join("\n")
+    }
+    if (!body) continue
+    // Codex's sandbox name reads as a request for full access, which the model tends to refuse.
+    if (role === "system" || role === "developer") system.push(body.replaceAll("danger-full-access", "standard-workspace-access"))
+    else turns.push([role, body])
+  }
+  if (!system.length && !turns.length) throw new PromptError("messages is empty")
+  // On a continuing thread the page already holds everything up to its last assistant turn, so
+  // last is every turn after that: parallel tool results arrive together and must all be sent.
+  const cut = turns.findLastIndex(([role]) => role === "assistant")
+  const last = clip(turns.slice(cut + 1).map(([, body]) => body).join("\n\n"), maxChars)
+  if (!system.length && turns.length === 1 && turns[0][0] === "user") {
+    return { full: clip(turns[0][1], maxChars), last, turns: 1 }
+  }
+  let kept = turns
+  let omitted = 0
+  if (kept.length > maxTurns) {
+    omitted = kept.length - maxTurns
+    kept = kept.slice(-maxTurns)
+  }
+  const build = () => {
+    const blocks = []
+    if (system.length) blocks.push("背景与任务设定：\n" + clip(system.join("\n\n"), Math.max(20_000, Math.floor(maxChars / 2))))
+    for (const [role, body] of kept) blocks.push(`${role === "assistant" ? "助手" : "用户"}：\n${clip(body, MAX_TURN_CHARS)}`)
+    return blocks.join("\n\n")
+  }
+  let full = build()
+  // Drop the oldest turns until the whole text fits. Always keep the last exchange.
+  while (full.length > maxChars && kept.length > 2) {
+    kept = kept.slice(1)
+    omitted++
+    full = build()
+  }
+  if (omitted) full = `（更早的对话已省略 ${omitted} 条）\n\n${full}`
+  if (full.length > maxChars) full = clip(full, maxChars)
+  return { full, last, turns: turns.length }
+}

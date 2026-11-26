@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="quota-title quota-desc">
+  <title id="quota-title">Usage card</title>
+  <desc id="quota-desc">A gauge with a needle.</desc>
+  <style>svg{color:#8A4E2E}@media (prefers-color-scheme:dark){svg{color:#C78E5C}}</style>
+  <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 17a8 8 0 0 1 16 0"/>
+    <path d="M12 17l4.2-4.2"/>
+    <circle cx="12" cy="17" r="1.2"/>
+    <path d="M4 20h16"/>
+  </g>
+</svg>

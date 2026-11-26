@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 560" role="img" aria-label="magpie-muse-web bridges a muse.ai web account into a Magpie provider through a local headless fingerprint browser">
+  <rect width="1440" height="560" fill="#121316"/>
+  <rect x="64" y="64" width="1312" height="432" fill="none" stroke="#3A3B40"/>
+  <rect x="104" y="128" width="38" height="3" fill="#C78E5C"/>
+  <text x="104" y="176" font-family="ui-monospace, Consolas, monospace" font-size="15" letter-spacing="5" fill="#C78E5C">WEB-ACCOUNT BRIDGE</text>
+  <text x="104" y="254" font-family="Georgia, 'Times New Roman', serif" font-size="62" fill="#ECE9E1">magpie-muse-web</text>
+  <text x="104" y="316" font-family="Georgia, 'Times New Roman', serif" font-size="34" fill="#A19D93">A muse.ai account, quietly spoken to.</text>
+  <text x="104" y="380" font-family="Inter, Segoe UI, sans-serif" font-size="19" fill="#A19D93">Headless fingerprint browser, account scheduling, and calm usage cards.</text>
+  <rect x="820" y="118" width="286" height="332" rx="2" fill="#1A1B20" stroke="#3A3B40"/>
+  <rect x="848" y="146" width="40" height="40" fill="#23252B"/>
+  <rect x="904" y="152" width="122" height="8" fill="#23252B"/>
+  <rect x="904" y="174" width="80" height="6" fill="#3A3B40"/>
+  <path d="M848 228h226M848 264h168M848 300h206M848 336h132" stroke="#3A3B40" stroke-width="6" stroke-linecap="round"/>
+  <rect x="848" y="376" width="112" height="30" fill="#C78E5C"/>
+  <path d="M880 391h44M896 377l14 14-14 14" stroke="#121316" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1112 284h38" stroke="#C78E5C" stroke-width="5" stroke-linecap="round"/>
+  <path d="m1140 268 16 16-16 16" stroke="#C78E5C" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="1172" y="150" width="176" height="272" rx="2" fill="#23252B" stroke="#3A3B40"/>
+  <rect x="1196" y="176" width="128" height="8" fill="#3A3B40"/>
+  <rect x="1196" y="206" width="128" height="42" fill="#1A1B20" stroke="#3A3B40"/>
+  <rect x="1210" y="221" width="86" height="8" fill="#8EA993"/>
+  <rect x="1196" y="262" width="128" height="42" fill="#1A1B20" stroke="#3A3B40"/>
+  <rect x="1210" y="277" width="60" height="8" fill="#3A3B40"/>
+  <rect x="1196" y="318" width="128" height="42" fill="#1A1B20" stroke="#3A3B40"/>
+  <rect x="1210" y="333" width="74" height="8" fill="#C78E5C"/>
+  <rect x="1196" y="382" width="128" height="8" fill="#3A3B40"/>
+  <path d="M64 496h1312" stroke="#3A3B40" stroke-width="2"/>
+</svg>

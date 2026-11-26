@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="connector-title connector-desc">
+  <title id="connector-title">Connector</title>
+  <desc id="connector-desc">A plug with two prongs.</desc>
+  <style>svg{color:#8A4E2E}@media (prefers-color-scheme:dark){svg{color:#C78E5C}}</style>
+  <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 3.5V8M15 3.5V8"/>
+    <path d="M6.5 8h11v3a5.5 5.5 0 0 1-11 0z"/>
+    <path d="M12 16.5V21"/>
+  </g>
+</svg>

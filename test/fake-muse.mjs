@@ -1,0 +1,197 @@
+// A loopback stand-in for muse.ai: the DOM shapes and /api/session behaviour the engine relies on.
+// Cookie hatch_sess decides who is signed in: "good…" works, anything else is signed out.
+import http from "node:http"
+
+const ESSENTIAL = ["hatch_sess", "hatch_gw", "hatch_vml", "hatch_native_auth_device"]
+
+const CHAT = `<!doctype html><html><head><meta charset="utf-8"><title>muse</title>
+<style>main{height:400px;overflow-y:auto}</style></head>
+<body><nav style="position:fixed;left:0;top:0;bottom:0;width:56px"><button aria-label="Search">s</button>
+<button id="menu" aria-label="Settings" style="position:absolute;bottom:8px;left:8px">≡</button></nav>
+<div data-hatch-shell-hydration-state="server" style="margin-left:120px"><main id="m"></main>
+<textarea></textarea><span id="c"></span><span id="conn">正在连接…</span></div><div id="pop"></div>
+<script>
+// Like muse.ai in zh_CN: the page says it is connecting to the VM until it is.
+setTimeout(()=>document.getElementById('conn').remove(),900);
+// Settings as muse.ai has it: the rail's bottom button opens a menu, its last item a dialog
+// whose Usage section draws each meter as a labelled progressbar.
+const pop=document.getElementById('pop');
+// Like muse.ai: the rail is in the server's HTML, its menu answers only after hydration.
+setTimeout(()=>{document.querySelector('[data-hatch-shell-hydration-state]').setAttribute('data-hatch-shell-hydration-state','hydrated');hydrate()},700);
+function hydrate(){
+const onEnter=(el,fn)=>{el.addEventListener('click',fn);el.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();fn()}})};
+onEnter(document.getElementById('menu'),()=>{
+  if(pop.querySelector('[role=menu]'))return;
+  pop.innerHTML='<div role="menu"><div role="menuitem" tabindex="-1">键盘快捷键<span>⌘/</span></div><div role="menuitem" tabindex="-1" id="set">设置<span>⌘,</span></div></div>';
+  onEnter(document.getElementById('set'),async()=>{
+    const u=await fetch('/api/fake-usage').then((r)=>r.json());
+    const meter=(name,note,detail,used)=>'<div><div><div><span data-slot="text">'+name+'</span><span data-slot="text">'+note+'</span></div><span data-slot="text">'+detail+'</span></div><div role="progressbar" aria-label="'+name+'" aria-valuenow="'+used+'" aria-valuemin="0" aria-valuemax="100"><div style="width:'+used+'%"></div></div></div>';
+    pop.innerHTML='<div role="dialog"><h2>使用情况</h2>'+meter('免费版','每周限额将在 '+u.reset+'重置','已使用 '+u.weekly+'%',u.weekly)+meter('额外的使用额度','从不过期','已使用 '+u.extra+'%（剩余 10&nbsp;亿个词元）',u.extra)+'</div>';
+  });
+});
+}
+const m=document.getElementById('m'), ta=document.querySelector('textarea'), c=document.getElementById('c');
+let n=0;
+// Threads as muse.ai's Next.js app has them: the first message of /thread/new gives the thread
+// its own path, and the router moves between threads without loading the page again.
+const threads={};
+let cur=null;
+window.next={router:{push(p){
+  if(cur)threads[cur]=[...m.children];
+  m.replaceChildren();
+  const id=(p.match(/^\\/thread\\/(?!new$)([^/]+)$/)||[])[1];
+  cur=id&&threads[id]?id:null;
+  history.pushState({},'',p);
+  setTimeout(()=>{if(cur&&location.pathname===p)m.replaceChildren(...threads[cur])},150);
+}}};
+function button(){c.innerHTML='<button aria-label="Send">Send</button>';c.firstChild.onclick=go}
+button();
+function bubble(cls,text){const d=document.createElement('div');d.className='hatch-chat-groupable-bubble '+cls;d.style.whiteSpace='pre-wrap';d.textContent=text;m.appendChild(d);return d}
+async function go(){
+  const t=ta.value; if(!t) return; ta.value=''; n++;
+  if(!cur){cur='t'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);history.replaceState({},'','/thread/'+cur)}
+  await fetch('/record',{method:'POST',body:t});
+  bubble('hatch-user-bubble-bg',t);
+  if(/QUOTA:/.test(t)){const d=document.createElement('div');d.textContent='已用完使用额度';m.appendChild(d);button();return}
+  c.innerHTML='<button data-testid="hatch-composer-stop-button" aria-label="Stop">■</button>';
+  let reply=/BARETOOL:/.test(t)?'{"name": "shell", "arguments": {"command": "pwd && ls -la"}}':/TOOLCALL:/.test(t)?'好的，我来看一下。\\n<tool_call>{"name": "shell", "arguments": {"command": "ls -la"}}</tool_call>':(t.match(/REPLY:(\\S+)/)||[])[1]||('第'+n+'轮 收到 '+t.length+' 字');
+  // The first answer to a required-tool request is prose; the repair turn gets the tool call.
+  if(/TOOLTEXT:/.test(t)) reply='我先用文字解释一下，不调用工具。';
+  if(/没有按格式调用工具/.test(t)) reply='<tool_call>{"name": "shell", "arguments": {"command": "ls"}}</tool_call>';
+  const delay=Number((t.match(/DELAY:(\\d+)/)||[])[1]||300);
+  const a=bubble('hatch-agent-bubble-bg','');
+  // muse.ai's bubble: the reply in .prose, suggested follow-ups as buttons beside it, there while it streams
+  if(/SUGGEST:/.test(t)){a.innerHTML='<div class="prose"></div><div class="mt-3"><button>运行一下测试看看</button></div>';const p=a.firstChild;const s='这个项目用的是 Vitest。';for(let i=0;i<s.length;i+=2){p.textContent=s.slice(0,i+2);await new Promise(r=>setTimeout(r,60))}button();return}
+  // a list marker the page restyles away once the item text comes, as muse.ai's renderer does
+  if(/RESTYLE:/.test(t)){await new Promise(r=>setTimeout(r,delay));a.textContent='清单：\\n-';await new Promise(r=>setTimeout(r,400));a.textContent='清单：\\n苹果\\n香蕉';button();return}
+  // muse.ai can show a progress line, drop its stop button, and write the tool call a moment later
+  if(/PAUSETOOL:/.test(t)){await new Promise(r=>setTimeout(r,delay));a.textContent='正在打开目录。';c.innerHTML='';await new Promise(r=>setTimeout(r,800));a.textContent='正在打开目录。\\n<tool_call>{"name": "shell", "arguments": {"command": "ls"}}</tool_call>';button();return}
+  // a generated picture: caption sits outside .prose, the image has no innerText
+  if(/IMAGE:/.test(t)){await new Promise(r=>setTimeout(r,delay));a.innerHTML='<div class="prose"></div>';const cap=document.createElement('div');cap.textContent='生成好了，这次戴上帽子了';a.appendChild(cap);const img=document.createElement('img');img.src='https://cdn.example/penguin.png';img.width=320;img.height=240;a.appendChild(img);button();return}
+  // the stop button can stay through a long silence before it disappears and the tool call follows
+  if(/PAUSESTOP:/.test(t)){await new Promise(r=>setTimeout(r,delay));a.textContent='正在打开目录。';await new Promise(r=>setTimeout(r,2000));c.innerHTML='';await new Promise(r=>setTimeout(r,800));a.textContent='正在打开目录。\\n<tool_call>{"name": "shell", "arguments": {"command": "ls"}}</tool_call>';button();return}
+  await new Promise(r=>setTimeout(r,delay));
+  for(let i=0;i<reply.length;i+=3){a.textContent=reply.slice(0,i+3);await new Promise(r=>setTimeout(r,40))}
+  button();
+}
+</script></body></html>`
+
+// muse.ai's live build, as muse2api's tools/verify_engine_selectors.py sees it: a <textarea>
+// composer not wrapped in a <form>, bubbles named hatch-chat-groupable-bubble with
+// hatch-agent-bubble-bg / chat-user-bubble on the same element, and composer testids for Send
+// and Stop. The hydration marker is present and already "hydrated". A visible "Resend message"
+// button outside the composer is a decoy: a substring Send search would click it.
+// `newBuild: "editor"` swaps only the composer for a contenteditable div, the fallback the
+// engine also accepts.
+const newChat = (editor) => `<!doctype html><html><head><meta charset="utf-8"><title>muse</title>
+<style>main{height:400px;overflow-y:auto}#comp{display:block;min-height:40px;width:320px}</style></head>
+<body data-hatch-shell-hydration-state="hydrated">
+<aside id="side"><button id="decoy" data-testid="history-resend" aria-label="Resend message">Resend message</button></aside>
+<main id="m"></main>
+<div id="composer">
+${editor ? '<div id="comp" contenteditable="true" role="textbox" aria-label="Message Muse"></div>' : '<textarea id="comp" aria-label="Message Muse"></textarea>'}
+<span id="c"></span></div><script>
+const m=document.getElementById('m'),comp=document.getElementById('comp'),c=document.getElementById('c');
+const IS_EDITOR=${editor ? "true" : "false"};
+document.getElementById('decoy').onclick=()=>fetch('/decoy',{method:'POST'});
+function read(){return IS_EDITOR?(comp.innerText||'').trim():(comp.value||'').trim()}
+function clear(){if(IS_EDITOR)comp.innerHTML='';else comp.value=''}
+let n=0;
+const threads={};let cur=null;
+window.next={router:{push(p){
+  if(cur)threads[cur]=[...m.children];
+  m.replaceChildren();
+  const id=(p.match(/^\\/thread\\/(?!new$)([^/]+)$/)||[])[1];
+  cur=id&&threads[id]?id:null;
+  history.pushState({},'',p);
+  setTimeout(()=>{if(cur&&location.pathname===p)m.replaceChildren(...threads[cur])},120);
+}}};
+function sendButton(){c.innerHTML='<button data-testid="hatch-composer-send-button" aria-label="Send message">Send</button>';c.firstChild.onclick=go}
+sendButton();
+function bubble(kind,text){const d=document.createElement('div');
+  d.className='hatch-chat-groupable-bubble '+(kind==='agent'?'hatch-agent-bubble-bg':'chat-user-bubble');
+  d.setAttribute('data-testid','hatch-chat-'+kind+'-bubble');d.style.whiteSpace='pre-wrap';d.textContent=text;m.appendChild(d);return d}
+async function go(){
+  const t=read(); if(!t) return; clear(); n++;
+  if(!cur){cur='t'+Date.now().toString(36);history.replaceState({},'','/thread/'+cur)}
+  await fetch('/record',{method:'POST',body:t});
+  bubble('user',t);
+  c.innerHTML='<button data-testid="hatch-composer-stop-button" aria-label="Stop">■</button>';
+  await new Promise(r=>setTimeout(r,200));
+  const reply=(t.match(/REPLY:(\\S+)/)||[])[1]||'新版 收到';
+  const a=bubble('agent','');a.innerHTML='<div class="prose"></div>';
+  for(let i=0;i<reply.length;i+=2){a.firstChild.textContent=reply.slice(0,i+2);await new Promise(r=>setTimeout(r,20))}
+  sendButton();
+}
+</script></body></html>`
+
+const NEW_CHAT = newChat(false)
+const EDITOR_CHAT = newChat(true)
+
+const SIGNED_OUT = `<!doctype html><html><body><h1>Log in to Muse</h1><button>Log in</button></body></html>`
+
+function cookies(req) {
+  return Object.fromEntries(
+    String(req.headers.cookie || "").split(";").map((p) => p.trim().split("=")).filter((p) => p[0]).map(([k, ...v]) => [k, v.join("=")]),
+  )
+}
+
+export async function startFakeMuse({ loginDelayMs = 600, newBuild = false } = {}) {
+  const state = { prompts: [], sessionCalls: 0, wakeCalls: 0, pageLoads: 0, decoys: 0, usage: { weekly: 12, extra: 0, reset: "10月15日" }, usageReads: 0 }
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://x")
+    const c = cookies(req)
+    const signedIn = /^good/.test(c.hatch_sess || "")
+    if (url.pathname === "/record") {
+      let body = ""
+      for await (const chunk of req) body += chunk
+      state.prompts.push(body)
+      return res.end("ok")
+    }
+    if (url.pathname === "/decoy") {
+      state.decoys++
+      return res.end("decoy")
+    }
+    if (url.pathname === "/api/session") {
+      state.sessionCalls++
+      if (!signedIn) return res.writeHead(401).end("{}")
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "set-cookie": [`hatch_vml=renewed${state.sessionCalls}; Path=/; Max-Age=86400; HttpOnly`],
+      })
+      // one VM per account, as on muse.ai; the session cookie stands for the account here
+      return res.end(JSON.stringify({ status: "assigned", vm_id: `vm-${c.hatch_sess}`, vm_state: "RUNNING" }))
+    }
+    if (url.pathname === "/api/fake-usage") {
+      state.usageReads++
+      return res.end(JSON.stringify(state.usage))
+    }
+    if (url.pathname === "/api/hatch/vm/wake") {
+      state.wakeCalls++
+      return res.end("{}")
+    }
+    if (url.pathname.startsWith("/thread/")) {
+      state.pageLoads++
+      // The chat page sets no hatch_gw or hatch_vml, as muse.ai no longer does (#2, #3).
+      const headers = { "content-type": "text/html; charset=utf-8" }
+      res.writeHead(200, headers)
+      return res.end(signedIn ? (newBuild === "editor" ? EDITOR_CHAT : newBuild ? NEW_CHAT : CHAT) : SIGNED_OUT)
+    }
+    if (url.pathname === "/") {
+      // The "login": the page sets the session cookies a moment after it opens, httpOnly like the real site.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+      return res.end(`<!doctype html><html><body>signing in<script>setTimeout(()=>fetch('/do-login'),${loginDelayMs})</script></body></html>`)
+    }
+    if (url.pathname === "/do-login") {
+      // Signing in sets only these two; the user is left on the home page.
+      res.writeHead(200, { "set-cookie": ["hatch_sess", "hatch_native_auth_device"].map((n) => `${n}=good-${n}; Path=/; Max-Age=86400; HttpOnly`) })
+      return res.end("ok")
+    }
+    res.writeHead(404).end()
+  })
+  await new Promise((r) => server.listen(0, "127.0.0.1", r))
+  const site = `http://127.0.0.1:${server.address().port}`
+  return { site, state, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r) }) }
+}
+
+export const goodCookies = () => Object.fromEntries(ESSENTIAL.map((n) => [n, `good-${n}`]))
