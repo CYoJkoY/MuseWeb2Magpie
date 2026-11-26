@@ -34,10 +34,12 @@
 ```sh
 git clone https://github.com/JohnWangggg/magpie-muse-web.git
 cd magpie-muse-web
-node engine/main.ts
+npm install
+npm run build:engine
+./engine-go/bin/<os>-<arch>/muse-web-engine
 ```
 
-启动后它会打印监听地址和数据目录。默认：
+引擎是 Go 原生二进制，`npm run build:engine` 会为当前平台构建它；运行时需要本机有 Node.js，引擎用它加载 `engine/driver.ts` 操作浏览器。启动后它会打印监听地址和数据目录。默认：
 
 ```text
 http://127.0.0.1:18611
@@ -89,7 +91,7 @@ magpie plugin login muse-web
 
 ## 它不会做什么
 
-- 不启动 `engine/main.ts`，不启动 Chrome/Edge/Chromium/Brave。
+- 不启动引擎，也不启动 Chrome/Edge/Chromium/Brave。
 - 不读取 `accounts.json`、不读取 cookie，也不把 cookie 写进 Magpie。
 - 引擎没运行时不会自动拉起；请求会返回“引擎没有响应”，先去启动引擎。
 - 不提供图片输入、生图/生视频接口；这些能力仍由引擎和 muse.ai 网页决定。
@@ -98,7 +100,7 @@ magpie plugin login muse-web
 
 | 现象 | 处理 |
 |---|---|
-| `muse-web 引擎没有响应` | 启动 `node engine/main.ts`，确认 `MUSE_WEB_ENGINE` 地址和端口 |
+| `muse-web 引擎没有响应` | 先 `npm run build:engine` 再运行 `muse-web-engine`，确认 `MUSE_WEB_ENGINE` 地址和端口 |
 | `engine_key_invalid` / 401 | `MUSE_WEB_ENGINE_KEY` 与数据目录里的 `engine.key` 不一致 |
 | `account_unknown` / `session_expired` | 账号 ID 过期或引擎里已移除，重新登录 |
 | `account_busy` / `quota_spent` | 引擎返回的 429；Magpie 会换号或等重置 |
@@ -108,7 +110,8 @@ magpie plugin login muse-web
 
 A connector edition of [magpie-muse-web](https://github.com/JohnWangggg/magpie-muse-web): it talks to a
 `muse-web` engine you run yourself over loopback HTTP. It never starts a browser, never reads cookie files
-and never spawns a process. Start the engine with `node engine/main.ts`, set `MUSE_WEB_ENGINE` and
+and never spawns a process. Build the engine with `npm run build:engine` and run the `muse-web-engine`
+binary (it needs Node.js on `PATH` to load `engine/driver.ts`), set `MUSE_WEB_ENGINE` and
 `MUSE_WEB_ENGINE_KEY`, then `magpie plugin add magpie-muse-web-connector` and `magpie plugin login muse-web`.
 Use the full edition if you want the bundled engine. Same provider id (`muse-web`), so install one, not both.
 

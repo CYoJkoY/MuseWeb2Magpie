@@ -20,7 +20,6 @@ const REFRESH_LEAD_MS = 10 * 60_000
 const CONTEXT_TOKENS = 128_000
 const OUTPUT_TOKENS = 16_000
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ENGINE_MAIN = path.join(HERE, "engine", "main.ts")
 const ICON = (() => {
   try {
     return `data:image/svg+xml;base64,${readFileSync(path.join(HERE, "icon.svg")).toString("base64")}`
@@ -30,6 +29,13 @@ const ICON = (() => {
 })()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function bundledEngine() {
+  const platform = process.platform === "win32" ? "windows" : process.platform
+  const binary = platform === "windows" ? "muse-web-engine.exe" : "muse-web-engine"
+  const arch = ({ x64: "amd64", ia32: "386" } as Record<string, string>)[process.arch] || process.arch
+  return path.join(HERE, "engine-go", "bin", `${platform}-${arch}`, binary)
+}
 
 // An engine at least as new as this plugin is kept: a Magpie that has not reloaded the plugin
 // yet must not keep replacing the engine a newer copy of the plugin started.
@@ -106,7 +112,7 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
 
   let starting = null
   let checkedAt = 0
-  // Makes sure the bundled engine answers, starting it with this runtime (Magpie's Bun) if needed.
+  // Makes sure the bundled engine answers, starting the native supervisor if needed.
   function ensureEngine({ force = false } = {}) {
     if (external()) return Promise.resolve(true)
     if (!force && Date.now() - checkedAt < 30_000) return Promise.resolve(true)
@@ -115,11 +121,18 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
       if (current(version)) return true
       // An engine left from an older plugin version is replaced; same data dir, same accounts.
       if (version) await retire()
-      const child = spawn(process.execPath, [ENGINE_MAIN], {
+      const binary = String(process.env.MUSE_WEB_ENGINE_BIN || bundledEngine()).trim()
+      if (!existsSync(binary)) throw new Error(`muse-web engine binary not found: ${binary}`)
+      const child = spawn(binary, [], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: { ...process.env, NODE_USE_ENV_PROXY: "1", MUSE_WEB_PARENT_PID: String(process.pid) },
+        env: {
+          ...process.env,
+          MUSE_WEB_NODE: process.execPath,
+          MUSE_WEB_DRIVER: path.join(HERE, "engine", "driver.ts"),
+          MUSE_WEB_PARENT_PID: String(process.pid),
+        },
       })
       child.on("error", () => {})
       child.unref()
@@ -131,9 +144,8 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
       return false
     })().then((ok) => {
       if (ok) checkedAt = Date.now()
-      starting = null
       return ok
-    })
+    }).finally(() => { starting = null })
     return starting
   }
 
