@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.12.2 · 2026-11-27
+
+- 安全：登录窗口打开聊天页时，`/json/list` 回的目标也走与调试端口同一条规则。0.12.0 之后启动路径已经用 `debuggerUrl()` 校验 `/json/version`，但登录轮询对 `/json/list` 里每个条目的 `webSocketDebuggerUrl` 一次都没检查过：登录窗口会开上几分钟，浏览器中途退出、端口被本机另一个进程接管时，引擎会把这个抢占者的地址当成自己的浏览器，连上去发 `Page.navigate`，等于把一条带登录态的操作通道交给对方——和 ADR 0015 里那个抢占窗口是同一个抢占者，只是晚了一步。现在 `engine/browser.ts` 新增 `endpointUrl()`，把校验收成一处（`ws:`/`wss:`、回环主机、端口与浏览器自己报的一致、路径前缀），`debuggerUrl()` 取 `/devtools/browser/`、新增 `pageUrl()` 取 `/devtools/page/`；`engine/login.ts` 新增导出 `chatTarget()`，只接受 `pageUrl()` 通过的目标、同站标签页优先，`openChat()` 只连它——列表里没有属于这个浏览器端口的目标时不再导航，抛出一条说明（`登录窗口的调试端口 <port> 上没有属于这个浏览器的页面，跳过打开聊天页`），把会话留给下一个人而不是交给一个来路不明的地址。
+- 测试：新增 `test/login-target.test.ts` 六条（接管场景下不连陌生目标、同站标签页优先、非 page 目标被拒、非列表形状的答复被拒），`test/browser-recovery.test.ts` 补上 `pageUrl()` 的地址矩阵。`SECURITY.md` 不变量 23 补充页面目标规则，设计见 `docs/adr/0015-browser-chosen-debug-port.md` 的修订一节。
+- 变更：`package-lock.json` 的版本号从 `0.11.0` 对齐到 `0.12.2`。它此前一直停在 0.11.0，只是元数据不一致，不影响安装结果；顺手对齐，免得看锁文件时以为装的是另一个版本。
+
 ## 0.12.1 · 2026-11-27
 
 - 修复：Magpie 用 Bun 运行插件时，引擎的运行时检查可能误判为「太旧」而拒绝启动。Bun 自己执行 TypeScript，`process.versions.node` 只是它模仿出来的兼容版本号，跟「Node 从 22.18 起默认剥离类型标注」这件事没有关系——本机的 Bun 1.4.5 报 26.3.0，所以恰好通过；换成一个报 22.6.0 的 Bun，`runsTypeScript()` 就会说运行时太旧，明明能跑也不启动，这是 0.12.0 引入的回归。现在判断移到 `engine/runtime.ts`：`process.versions.bun` 存在就直接放行，否则才按 Node 的 22.18 规则；拒绝时的提示改用运行时自己的名字（`Bun 1.4.5`、`Node 20.11.1`），不再把 Bun 的兼容版本号说成 Node 版本。新增 `test/runtime.test.ts` 固定两侧矩阵：Node 22.17 拒绝、22.18 起放行，Bun 无论报哪个 Node 版本都放行，没有可用版本号时不启动。
