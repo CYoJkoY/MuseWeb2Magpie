@@ -96,10 +96,13 @@ export interface BrowserArgs {
 }
 
 export function browserArgs({ port, profileDir, headless, hidden = false, proxy, url = "about:blank", extraArgs = [] }: BrowserArgs): string[] {
+  // No --remote-allow-origins: it defaults to off, so a page loaded in this browser cannot talk to
+  // its own DevTools port. Our CDP client is a WebSocket without an Origin header, which Chrome
+  // still accepts, so the engine keeps full control while a hostile site in the profile cannot
+  // drive the browser or read the signed-in muse.ai session.
   const args = [
     `--remote-debugging-port=${port}`,
     "--remote-debugging-address=127.0.0.1",
-    "--remote-allow-origins=*",
     `--user-data-dir=${profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",

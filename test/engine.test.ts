@@ -218,6 +218,10 @@ describe("pure parts", () => {
 
   test("browser flags follow the proxy and window mode", () => {
     const base = { port: 1, profileDir: "/p" }
+    // DevTools stays closed to web origins: a page in the engine profile must not drive CDP.
+    const flags = browserArgs({ ...base, headless: true, proxy: "" })
+    assert.ok(!flags.some((a) => a.startsWith("--remote-allow-origins")))
+    assert.ok(flags.includes("--remote-debugging-address=127.0.0.1"))
     assert.ok(browserArgs({ ...base, headless: true, proxy: "direct" }).includes("--no-proxy-server"))
     assert.ok(browserArgs({ ...base, headless: false, proxy: "http://h:1" }).includes("--proxy-server=http://h:1"))
     const slashed = browserArgs({ ...base, headless: true, proxy: "http://h:1/" })
