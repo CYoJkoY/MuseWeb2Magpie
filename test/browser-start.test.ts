@@ -53,16 +53,24 @@ test("the start budget has one default and one way to raise it", () => {
 test("a browser that stays alive without opening its port is reported with what it said", { skip: process.platform === "win32" && "a shell script needs a POSIX host", timeout: 30_000 }, async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "mw-silent-"))
   const fake = path.join(root, "fake-browser")
-  // Ignores the flags it is handed and stays alive without ever writing DevToolsActivePort: the
-  // shape of a start that stalls instead of failing.
-  writeFileSync(fake, "#!/bin/sh\necho 'fake-browser: profile is locked' >&2\nexec sleep 30\n", { mode: 0o755 })
+  // Ignores the flags it is handed, writes a port file nobody can use, and stays alive: the shape
+  // of a start that stalls instead of failing. The file it wrote also proves the message is built
+  // before the temporary profile is removed — after that there is nothing left to quote.
+  writeFileSync(fake, [
+    "#!/bin/sh",
+    'for arg in "$@"; do case "$arg" in --user-data-dir=*) dir="${arg#--user-data-dir=}";; esac; done',
+    'echo "not-a-port" > "$dir/DevToolsActivePort"',
+    "echo 'fake-browser: profile is locked' >&2",
+    "exec sleep 30",
+    "",
+  ].join("\n"), { mode: 0o755 })
   const started = Date.now()
   try {
     await assert.rejects(
       launchBrowser({ executable: fake, profileDir: path.join(root, "browser"), temporary: true, waitMs: 1500 }),
       (err: any) => {
         assert.match(err.message, /did not open its debugging port within \d+ s/)
-        assert.match(err.message, /DevToolsActivePort still missing/)
+        assert.match(err.message, /DevToolsActivePort holds "not-a-port\\n"/)
         assert.match(err.message, /profile is locked/)
         return true
       },

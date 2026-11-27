@@ -401,9 +401,11 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
     }
     await new Promise<void>((r) => setTimeout(r, 250))
   }
-  const waited = Date.now() - started
+  // The message is built before closing: closing a temporary profile removes its directory, and a
+  // port file that was there all along would then be reported as one that never arrived.
+  const failure = startTimeout({ profileDir, stderr, last, waitedMs: Date.now() - started })
   await close()
-  throw startTimeout({ profileDir, stderr, last, waitedMs: waited })
+  throw failure
 }
 
 // Resolves once the process is gone: asked politely first, killed after 3 s.
