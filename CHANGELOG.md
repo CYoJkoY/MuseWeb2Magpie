@@ -1,5 +1,9 @@
 # 更新记录
 
+## 0.12.1 · 2026-11-27
+
+- 修复：Magpie 用 Bun 运行插件时，引擎的运行时检查可能误判为「太旧」而拒绝启动。Bun 自己执行 TypeScript，`process.versions.node` 只是它模仿出来的兼容版本号，跟「Node 从 22.18 起默认剥离类型标注」这件事没有关系——本机的 Bun 1.4.5 报 26.3.0，所以恰好通过；换成一个报 22.6.0 的 Bun，`runsTypeScript()` 就会说运行时太旧，明明能跑也不启动，这是 0.12.0 引入的回归。现在判断移到 `engine/runtime.ts`：`process.versions.bun` 存在就直接放行，否则才按 Node 的 22.18 规则；拒绝时的提示改用运行时自己的名字（`Bun 1.4.5`、`Node 20.11.1`），不再把 Bun 的兼容版本号说成 Node 版本。新增 `test/runtime.test.ts` 固定两侧矩阵：Node 22.17 拒绝、22.18 起放行，Bun 无论报哪个 Node 版本都放行，没有可用版本号时不启动。
+
 ## 0.12.0 · 2026-11-27
 
 - 说明：下面标注 `engine-go/*` 与 `test/go-engine.test.ts` 的条目，写的是这些改动当初在 Go 引擎里的实现；0.12.0 把它们一并移植到 TypeScript，行为、错误码与安全不变量都不变，对应实现见 `engine/` 下的同名模块与 `test/engine-*.test.ts`，来龙去脉见 `docs/adr/0016-typescript-engine.md`。

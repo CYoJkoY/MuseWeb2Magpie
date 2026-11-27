@@ -9,6 +9,7 @@ import { CHALLENGE_HEADER, healthChallenge, provesHealth } from "./engine/health
 import { anyFetch, credentialSafeUrl } from "./engine/local-fetch.ts"
 import { siteProblem } from "./engine/site.ts"
 import { VERSION } from "./engine/version.ts"
+import { runsTypeScript, runtimeLabel } from "./engine/runtime.ts"
 
 const PROVIDER = "muse-web"
 const MODEL = "muse-spark"
@@ -48,14 +49,6 @@ function current(version) {
   const b = VERSION.split(".").map(Number)
   for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0)
   return true
-}
-
-// Node runs .ts directly from 22.18 on, where stripping type annotations stopped being opt-in. An
-// older runtime ends the engine at its first type-only import, so the engine is not started at all
-// and the person is told which Node to install instead of being left with a timeout.
-function runsTypeScript() {
-  const [major, minor] = process.versions.node.split(".").map(Number)
-  return major > 22 || (major === 22 && minor >= 18)
 }
 
 function originFrom(value) {
@@ -207,7 +200,7 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
         throw new Error(`muse-web 引擎入口缺失：${ENGINE_ENTRY}（插件安装不完整，请重新安装 magpie-muse-web）`)
       }
       if (!named && !runsTypeScript()) {
-        throw new Error(`muse-web 引擎需要 Node >=22.18 才能直接运行 TypeScript，当前是 ${process.versions.node}；请升级 Node，或用 MUSE_WEB_ENGINE_BIN 指向一个原生引擎`)
+        throw new Error(`muse-web 引擎需要能直接运行 TypeScript 的运行时（Node >=22.18，或 Bun），当前是 ${runtimeLabel()}；请升级运行时，或用 MUSE_WEB_ENGINE_BIN 指向一个原生引擎`)
       }
       const child = spawn(named || process.execPath, named ? [] : [ENGINE_ENTRY], {
         detached: true,

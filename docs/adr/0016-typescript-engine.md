@@ -58,7 +58,21 @@ The language set is now Dart (Flutter app) + Zig + TypeScript, with this plugin 
 - One runtime (Node) runs the engine and the driver; one test runner (`node --test`) covers both.
 - No native binaries are built, packaged, or committed; the git install and the tarball install
   behave the same.
-- The engine now depends on the host's Node version (`>=22.18`), which the plugin already required
-  for the driver.
+- The engine now depends on the host being able to run TypeScript: Node `>=22.18` (which the plugin
+  already required for the driver) or any Bun. See the `0.12.1` revision below.
 - Go-specific implementation notes in ADRs 0001–0012 describe the pre-`0.12.0` engine; each carries
   a note pointing here.
+
+## Revision: `0.12.1` — the host runtime may be Bun
+
+Magpie runs plugins with its own cached Bun, not Node. The `0.12.0` guard read
+`process.versions.node` alone, but Bun only emulates a Node version number for compatibility, and
+that number has nothing to do with which Node release added TypeScript support: Bun 1.4.5 reports
+`26.3.0`. So the release passed by coincidence, and a Bun reporting `22.6.0` would have been refused
+although it runs these files natively.
+
+The check lives in `engine/runtime.ts` now. A runtime that reports `process.versions.bun` runs the
+engine; otherwise the Node `22.18` rule applies, and a runtime with no usable version number does
+not start. The refusal message names the runtime as it names itself (`Bun 1.4.5`, `Node 20.11.1`)
+instead of presenting Bun's emulated number as a Node version. `test/runtime.test.ts` holds both
+sides of the matrix.
