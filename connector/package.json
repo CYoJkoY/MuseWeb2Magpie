@@ -40,7 +40,7 @@
     "win32"
   ],
   "scripts": {
-    "test": "node --test contract.test.ts",
+    "test": "node --test contract.test.ts security.test.ts",
     "typecheck": "tsc --noEmit",
     "no-javascript": "node ../tools/no-javascript.ts"
   },

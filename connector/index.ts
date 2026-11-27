@@ -2,6 +2,16 @@
 // browser, never reads cookie files and never spawns a process; it only speaks HTTP to
 // MUSE_WEB_ENGINE (or the `engine` option). Use the full magpie-muse-web package when you want
 // the bundled engine.
+//
+// This file is published on its own (package `files` ships only index.ts), so the transport and
+// identity rules it needs cannot be imported from `engine/`. They are kept byte-for-byte in step
+// with `engine/local-fetch.ts` and `engine/health.ts` in the parent package; `connector/security.test.ts`
+// drives the same allow/refuse matrix so the two editions cannot drift apart silently.
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
+import http from "node:http"
+import https from "node:https"
+import { Readable } from "node:stream"
+
 const PROVIDER = "muse-web"
 const MODEL = "muse-spark"
 const CONTROL_TIMEOUT_MS = 10_000
@@ -10,9 +20,112 @@ const REFRESH_LEAD_MS = 10 * 60_000
 const CONTEXT_TOKENS = 128_000
 const OUTPUT_TOKENS = 16_000
 const DEFAULT_ENGINE = "http://127.0.0.1:18611"
+const HEALTH_TIMEOUT_MS = 1500
+// How long a port's health proof is trusted before it is asked again.
+const PROOF_TTL_MS = 30_000
+const CHALLENGE_HEADER = "x-muse-challenge"
+const HEALTH_PREFIX = "muse-web-health:"
 const ICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNkQ1QkZGIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRTI1NDlBIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9InVybCgjZykiLz48cGF0aCBkPSJNMTQgNDdWMjFsMTIuNSAxNUwzOSAyMXYyNiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjYuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PHBhdGggZD0iTTQ5LjUgOS41bDIuMyA2LjIgNi4yIDIuMy02LjIgMi4zLTIuMyA2LjItMi4zLTYuMi02LjItMi4zIDYuMi0yLjN6IiBmaWxsPSIjZmZmIi8+PC9zdmc+"
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"])
+
+function isLoopbackUrl(value: unknown): boolean {
+  try {
+    return LOOPBACK.has(new URL(String(value)).hostname)
+  } catch {
+    return false
+  }
+}
+
+// engine.key and account handles are credentials. They may travel in the clear only to this
+// machine; anywhere else the carrier has to be https. Same rule as `credentialSafeUrl()` in
+// `engine/local-fetch.ts`.
+function credentialSafeUrl(value: unknown): boolean {
+  if (isLoopbackUrl(value)) return true
+  try {
+    return new URL(String(value)).protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
+function abortError(signal: any) {
+  if (signal?.reason instanceof Error) return signal.reason
+  return Object.assign(new Error("This operation was aborted"), { name: "AbortError" })
+}
+
+function redirectRefused(status: number, location?: string) {
+  return Object.assign(new Error(`engine answered with a redirect (HTTP ${status}), refused`), {
+    name: "EngineRedirectError",
+    code: "engine_redirect_refused",
+    location: location || "",
+  })
+}
+
+// Loopback goes through node:http(s) directly, so an HTTP(S)_PROXY in the environment never sees
+// the key; a named remote engine goes through global fetch. Either way a redirect is refused
+// instead of chased, since it could carry the account handle to an origin never vetted here.
+function engineFetch(input: any, init: any = {}): Promise<Response> {
+  const options = init && typeof init === "object" ? init : {}
+  if (!isLoopbackUrl(input)) return fetch(input, options.redirect ? options : { ...options, redirect: "error" })
+  let url: URL
+  try {
+    url = input instanceof URL ? input : new URL(String(input))
+  } catch {
+    return Promise.reject(new TypeError(`invalid URL: ${input}`))
+  }
+  const lib = url.protocol === "https:" ? https : http
+  const headers: Record<string, string> = {}
+  for (const [name, value] of new Headers(options.headers)) headers[name] = value
+  if (!("accept-encoding" in headers)) headers["accept-encoding"] = "identity"
+  const method = String(options.method || "GET").toUpperCase()
+  const signal = options.signal || undefined
+  if (signal?.aborted) return Promise.reject(abortError(signal))
+  return new Promise((resolve, reject) => {
+    const req = lib.request(url, { method, headers, agent: false, signal }, (res) => {
+      const status = res.statusCode || 502
+      if (status >= 300 && status < 400) {
+        res.resume()
+        req.destroy()
+        reject(redirectRefused(status, res.headers.location))
+        return
+      }
+      const out = new Headers()
+      for (let i = 0; i < res.rawHeaders.length; i += 2) out.append(res.rawHeaders[i], res.rawHeaders[i + 1])
+      const bodyless = method === "HEAD" || status === 204 || status === 304
+      resolve(new Response(bodyless ? null : Readable.toWeb(res), {
+        status,
+        statusText: res.statusMessage || "",
+        headers: out,
+      }))
+    })
+    req.on("error", reject)
+    const body = options.body
+    if (body == null) req.end()
+    else if (typeof body === "string") req.end(body)
+    else if (Buffer.isBuffer(body) || body instanceof Uint8Array) req.end(body)
+    else if (typeof body.pipe === "function") body.pipe(req)
+    else if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) Readable.fromWeb(body).pipe(req)
+    else req.end(String(body))
+  })
+}
+
+function healthChallenge(): string {
+  return randomBytes(16).toString("hex")
+}
+
+// Byte-for-byte with `engine/health.ts` and engine-go's healthProof.
+function healthProof(key: string, nonce: string): string {
+  return createHmac("sha256", key).update(HEALTH_PREFIX + nonce).digest("hex")
+}
+
+function provesHealth(body: any, key: string, nonce: string): boolean {
+  const got = typeof body?.proof === "string" ? body.proof.trim().toLowerCase() : ""
+  if (!/^[0-9a-f]{64}$/.test(got)) return false
+  return timingSafeEqual(Buffer.from(got, "hex"), Buffer.from(healthProof(key, nonce), "hex"))
+}
 
 function originFrom(value) {
   return String(value).trim().replace(/\/+$/, "").replace(/\/v1$/, "")
@@ -44,13 +157,59 @@ function structured(windows: any): any[] {
 
 export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}) => {
   const opt = options && typeof options === "object" ? options : {}
-  const engineOrigin = () => originFrom(opt.engine || process.env.MUSE_WEB_ENGINE || DEFAULT_ENGINE)
+  const namedEngine = () => String(opt.engine || process.env.MUSE_WEB_ENGINE || "").trim()
+  const engineOrigin = () => originFrom(namedEngine() || DEFAULT_ENGINE)
   const engineBaseURL = () => `${engineOrigin()}/v1`
   const engineKey = () => String(opt.key ?? process.env.MUSE_WEB_ENGINE_KEY ?? "").trim()
 
-  async function control(pathname, method, handle) {
+  // Why a named engine may not receive a credential, or "" when it may. The connector's whole
+  // point is pointing at an engine you run elsewhere, so this is the case the transport rule
+  // exists for: a plain-http LAN or domain address would put engine.key on the wire in the clear.
+  const originTrouble = () => {
+    if (!namedEngine() || credentialSafeUrl(engineOrigin())) return ""
+    return `引擎地址 ${engineOrigin()} 既不是本机回环地址，也不是 https。engine.key 和账号句柄只会发给回环或 https 端口；请改用 https 证书，或让引擎跑在 127.0.0.1。`
+  }
+
+  // When the port last proved it holds this engine's key.
+  let verifiedAt = 0
+
+  // Asks the engine to prove it holds engine.key: send a nonce, check the HMAC only a key holder
+  // can make. A port that answers in the engine's name but cannot prove itself is never handed
+  // the key — the same gate the full edition uses before it sends a credential anywhere.
+  async function inspect(): Promise<{ ours: boolean; answered: boolean }> {
+    if (originTrouble()) return { ours: false, answered: false }
+    const key = engineKey()
+    if (!key) return { ours: false, answered: false }
+    const nonce = healthChallenge()
     try {
-      return await fetch(`${engineOrigin()}${pathname}`, {
+      const res = await engineFetch(`${engineOrigin()}/v1/health`, {
+        headers: { [CHALLENGE_HEADER]: nonce },
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      })
+      const body = res.ok ? await res.json() as any : null
+      if (body?.engine !== "muse-web") return { ours: false, answered: true }
+      if (provesHealth(body, key, nonce)) {
+        verifiedAt = Date.now()
+        return { ours: true, answered: true }
+      }
+      return { ours: false, answered: true }
+    } catch {
+      return { ours: false, answered: false }
+    }
+  }
+
+  // True only when the port may be sent engine.key and account handles.
+  async function ours(): Promise<boolean> {
+    if (originTrouble()) return false
+    if (Date.now() - verifiedAt < PROOF_TTL_MS) return true
+    return (await inspect()).ours
+  }
+
+  async function control(pathname, method, handle) {
+    // Never hand engine.key (or an account handle) to a port that has not proven it is ours.
+    if (!(await ours())) return null
+    try {
+      return await engineFetch(`${engineOrigin()}${pathname}`, {
         method,
         headers: engineHeaders(engineKey(), handle),
         signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
@@ -61,7 +220,12 @@ export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}
   }
 
   function unreachable() {
-    return new Error(`muse-web 引擎没有响应（${engineOrigin()}）。先启动引擎，并设置 MUSE_WEB_ENGINE / MUSE_WEB_ENGINE_KEY。`)
+    const why = originTrouble()
+    return new Error(
+      why
+        ? `muse-web 引擎不可以用：${why}`
+        : `muse-web 引擎没有响应（${engineOrigin()}）。先启动引擎，并设置 MUSE_WEB_ENGINE / MUSE_WEB_ENGINE_KEY；引擎必须能对 /v1/health 的挑战作出自证（旧版引擎请升级）。`,
+    )
   }
 
   async function engineLogin() {
@@ -150,7 +314,7 @@ export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}
         const handle = handleOf(await getAuth())
         if (!handle) return { error: "muse-web account has no engine handle", signIn: "expired" }
         const res = await control("/v1/usage", "GET", handle)
-        if (!res) return { error: "engine unreachable" }
+        if (!res) return { error: originTrouble() || "engine unreachable" }
         if (res.status === 401) return { error: "session refused", signIn: "expired" }
         let body: any = {}
         try {
@@ -177,6 +341,8 @@ export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}
             const auth = await getAuth()
             const handle = handleOf(auth)
             if (!handle) throw Object.assign(new Error("muse-web account has no engine handle"), { signIn: "expired" })
+            // The chat path carries both the key and the handle; gate it exactly like control().
+            if (!(await ours())) throw unreachable()
             const incoming = new Headers(init?.headers)
             const headers = new Headers(engineHeaders(engineKey(), handle))
             for (const name of ["content-type", "accept", "x-muse-session"]) {
@@ -184,7 +350,7 @@ export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}
               if (value) headers.set(name, value)
             }
             try {
-              return await fetch(input, { method: init?.method, headers, body: init?.body, signal: init?.signal })
+              return await engineFetch(input, { method: init?.method, headers, body: init?.body, signal: init?.signal })
             } catch {
               throw unreachable()
             }

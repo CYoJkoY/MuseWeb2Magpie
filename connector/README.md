@@ -68,6 +68,10 @@ magpie plugin login muse-web
 
 也可以在 Magpie 的插件选项里设置 `engine` 和 `key`，它们的优先级高于环境变量。
 
+`MUSE_WEB_ENGINE` 指向别的机器时必须是 `https` 地址：`engine.key` 和账号句柄是凭据，明文 http
+的局域网 / 域名地址会被直接拒绝，连接都不会建立。`127.0.0.1` 的回环地址不受影响。引擎还要能对
+`/v1/health` 的挑战作出自证（旧版引擎升级后才能通过），证明不了的端口拿不到密钥。
+
 ## 两种登录方式
 
 1. **在已运行的引擎里登录 muse.ai**：connector 调用引擎的 `POST /v1/login`，引擎打开一个浏览器窗口；
@@ -101,6 +105,8 @@ magpie plugin login muse-web
 | 现象 | 处理 |
 |---|---|
 | `muse-web 引擎没有响应` | 先 `npm run build:engine` 再运行 `muse-web-engine`，确认 `MUSE_WEB_ENGINE` 地址和端口 |
+| `引擎不可以用`（提到 https / 回环） | `MUSE_WEB_ENGINE` 必须是本机回环地址或 `https`，明文 http 的外部地址不再接受 |
+| 反复提示引擎不响应、旧版引擎 | 连接的引擎须支持 `/v1/health` 的 HMAC 自证（完整版 0.11 起的引擎都支持），旧引擎请升级后重启 |
 | `engine_key_invalid` / 401 | `MUSE_WEB_ENGINE_KEY` 与数据目录里的 `engine.key` 不一致 |
 | `account_unknown` / `session_expired` | 账号 ID 过期或引擎里已移除，重新登录 |
 | `account_busy` / `quota_spent` | 引擎返回的 429；Magpie 会换号或等重置 |
@@ -114,6 +120,10 @@ and never spawns a process. Build the engine with `npm run build:engine` and run
 binary (it needs Node.js on `PATH` to load `engine/driver.ts`), set `MUSE_WEB_ENGINE` and
 `MUSE_WEB_ENGINE_KEY`, then `magpie plugin add magpie-muse-web-connector` and `magpie plugin login muse-web`.
 Use the full edition if you want the bundled engine. Same provider id (`muse-web`), so install one, not both.
+Credentials (`engine.key` and account handles) only travel to loopback or over `https:` — a
+plain-http remote address is refused before a connection is opened — and the connector sends them
+only to a port that proves it holds the key via the `/v1/health` HMAC challenge, so a squatter or a
+pre-upgrade engine never receives them. Redirects are refused rather than followed.
 
 ## 致谢
 

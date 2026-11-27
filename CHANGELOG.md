@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 安全：connector 版补齐与完整版一致的凭据防线。此前 connector 对任何 `MUSE_WEB_ENGINE` 地址直接发 `engine.key` 和账号句柄，还走环境代理、跟随重定向；现在（1）地址必须是本机回环或 `https`，明文 http 的局域网 / 域名地址在连接前就被拒绝并说明原因；（2）端口先要对 `/v1/health` 的 HMAC 挑战自证（与完整版引擎逐字节一致的实现），证明不了的冒充端口拿不到密钥；（3）回环请求直接走 `node:http(s)`，不经过环境代理；（4）任何 3xx 一律拒绝而不追，防止账号句柄被重定向到未经审查的地址。新增 `connector/security.test.ts` 与完整版 `test/engine-origin.test.ts` 驱动同一张允许 / 拒绝矩阵（10 个 connector 测试全绿），完整版 `anyFetch` 同步加「拒绝重定向」并由 `test/local-fetch.test.ts` 守住。
 - 安全：凭据（`engine.key` 与账号句柄）只在回环或 `https` 上传输。插件指向外部引擎（`MUSE_WEB_ENGINE` / `engine` 选项）时，新增的 `credentialSafeUrl()` 只在目标是本机回环或 `https:` 时才允许发送；明文 http 的局域网 / 域名地址（无论是手输还是某个 Agent 的环境带入）在探测前就被拒绝，插件报「引擎连不上」并说明要用 https 或 `127.0.0.1`，连接不会建立。新增 `test/engine-origin.test.ts` 钉住允许 / 拒绝集合与被拒地址「一字节密钥都收不到」。设计见 `docs/adr/0006-credentials-over-the-wire.md`，`SECURITY.md` 不变量增到十四条。
 - 安全：免鉴权的 `/v1/health` 不再返回账号数——任何本机用户都能问它，现在只说「引擎在、哪个版本」，账号数留在密钥之后的 `/v1/accounts`。新增 Go 测试 `TestHealthDoesNotCountAccounts` 守住这条，`test/go-engine.test.ts` 相应断言 health 不再带 `accounts`。
 - 变更：引擎监听器的超时与上限收敛到一处构造（`main.go` 的 `newHTTPServer()`），新增 `ReadTimeout`（30 秒，头与体一起计时）——一个只滴字节、迟迟不结束的请求再也无法长期占住进程；仍不设 `WriteTimeout` 以免截断 SSE 流。新增 `TestHTTPServerSetsItsLimits` 钉住各超时与头部上限。

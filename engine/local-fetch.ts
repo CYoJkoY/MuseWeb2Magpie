@@ -33,6 +33,18 @@ function abortError(signal: any) {
   return Object.assign(new Error("This operation was aborted"), { name: "AbortError" })
 }
 
+// The engine never redirects, and following one would re-issue the request at an origin this
+// process never vetted. `authorization` is dropped on a cross-origin redirect, but the account
+// handle rides in a custom header (`x-muse-account`) that is not, so a redirect is treated as a
+// refusal rather than something to chase.
+function redirectRefused(status: number, location?: string) {
+  return Object.assign(new Error(`engine answered with a redirect (HTTP ${status}), refused`), {
+    name: "EngineRedirectError",
+    code: "engine_redirect_refused",
+    location: location || "",
+  })
+}
+
 export function localFetch(input: any, init: any = {}): Promise<Response> {
   const url = input instanceof URL ? input : new URL(String(input))
   const lib = url.protocol === "https:" ? https : http
@@ -48,6 +60,12 @@ export function localFetch(input: any, init: any = {}): Promise<Response> {
       const out = new Headers()
       for (let i = 0; i < res.rawHeaders.length; i += 2) out.append(res.rawHeaders[i], res.rawHeaders[i + 1])
       const status = res.statusCode || 502
+      if (status >= 300 && status < 400) {
+        res.resume()
+        req.destroy()
+        reject(redirectRefused(status, res.headers.location))
+        return
+      }
       const bodyless = method === "HEAD" || status === 204 || status === 304
       resolve(new Response(bodyless ? null : Readable.toWeb(res), {
         status,
@@ -68,5 +86,9 @@ export function localFetch(input: any, init: any = {}): Promise<Response> {
 
 // Same signature as fetch, unless the request is loopback: then no proxy is involved.
 export function anyFetch(input: any, init?: any): Promise<Response> {
-  return isLoopbackUrl(input) ? localFetch(input, init) : fetch(input, init)
+  const options = init && typeof init === "object" ? init : {}
+  if (isLoopbackUrl(input)) return localFetch(input, options)
+  // Same "no chase" rule on the global-fetch path (a remote https engine): fetch would follow up
+  // to 20 redirects and keep custom headers such as x-muse-account on a cross-origin hop.
+  return fetch(input, options.redirect ? options : { ...options, redirect: "error" })
 }

@@ -16,7 +16,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=1 contract.test.ts \"test/*.test.ts\" connector/contract.test.ts",
+    "test": "node --test --test-concurrency=1 contract.test.ts \"test/*.test.ts\" connector/contract.test.ts connector/security.test.ts",
     "pretest": "npm run build:engine",
     "build:engine": "node tools/build-engine.ts",
     "test:go": "go -C engine-go test ./...",

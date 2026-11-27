@@ -1,7 +1,10 @@
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
+import { createHmac } from "node:crypto"
 import http from "node:http"
 import { MuseWebConnectorPlugin } from "./index.ts"
+
+const KEY = "secret"
 
 let server, base
 const seen = []
@@ -17,7 +20,13 @@ before(async () => {
         res.writeHead(status, { "content-type": "application/json" })
         res.end(data)
       }
-      if (req.url === "/v1/health") return send(200, { engine: "muse-web", version: "0.6.0", accounts: 1 })
+      if (req.url === "/v1/health") {
+        const health: any = { engine: "muse-web", version: "0.11.0" }
+        // Prove identity like the real engine: answer the challenge with an HMAC over the key.
+        const nonce = req.headers["x-muse-challenge"]
+        if (typeof nonce === "string" && nonce) health.proof = createHmac("sha256", KEY).update(`muse-web-health:${nonce}`).digest("hex")
+        return send(200, health)
+      }
       if (req.url === "/v1/accounts") return send(200, { accounts: [{ id: "muse-abc", label: "muse.ai test" }] })
       if (req.url === "/v1/login" && req.method === "POST") return send(200, { id: "login-1", url: "http://127.0.0.1/login/login-1" })
       if (req.url === "/v1/login/login-1") return send(200, { status: "done", handle: "muse-abc", expires: Date.now() + 86_400_000, label: "muse.ai test" })
