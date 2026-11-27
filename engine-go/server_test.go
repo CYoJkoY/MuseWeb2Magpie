@@ -54,7 +54,7 @@ func TestEveryRouteRequiresTheKey(t *testing.T) {
 		if !rt.auth {
 			continue
 		}
-		path := strings.Replace(rt.pattern, "{id}", "abc", 1)
+		path := strings.Replace(rt.pattern, "{id}", testLoginID, 1)
 		rec := call(e, request(rt.method, path, "127.0.0.1:18611"))
 		if rec.Code != 401 {
 			t.Errorf("%s %s without Authorization = %d, want 401", rt.method, path, rec.Code)
@@ -102,7 +102,7 @@ func TestAuthenticatedRoutesAcceptTheKey(t *testing.T) {
 		if !rt.auth {
 			continue
 		}
-		path := strings.Replace(rt.pattern, "{id}", "abc", 1)
+		path := strings.Replace(rt.pattern, "{id}", testLoginID, 1)
 		r := request(rt.method, path, "127.0.0.1:18611")
 		r.Header.Set("authorization", "Bearer "+e.cfg.key)
 		rec := call(e, r)
@@ -180,7 +180,7 @@ func TestHealthProofStillAnswers(t *testing.T) {
 // from a browser without the engine key, and keeps its hardening headers.
 func TestLoginPageStillRendersWithoutKey(t *testing.T) {
 	e := newTestEngine(t)
-	rec := call(e, request(http.MethodGet, "/login/abc", "127.0.0.1:18611"))
+	rec := call(e, request(http.MethodGet, "/login/"+testLoginID, "127.0.0.1:18611"))
 	if rec.Code != 200 {
 		t.Fatalf("login page status = %d, want 200", rec.Code)
 	}
@@ -240,10 +240,15 @@ func TestLoopbackHost(t *testing.T) {
 }
 
 // TestWrongLoginIDFormatStaysNotFound keeps the id rules where they live: in the route's matcher,
-// not re-checked by hand inside the handler.
+// not re-checked by hand inside the handler. The shape rule is what keeps the unauthenticated
+// page from becoming a way to ask the driver questions with made-up paths.
 func TestWrongLoginIDFormatStaysNotFound(t *testing.T) {
 	e := newTestEngine(t)
-	for _, path := range []string{"/v1/login/", "/v1/login/a/b", "/login/", "/login/a/b"} {
+	for _, path := range []string{
+		"/v1/login/", "/v1/login/a/b", "/login/", "/login/a/b",
+		"/login/../x", "/login/a%20b", "/login/abc", "/login/x%2Fy",
+		"/login/" + strings.Repeat("a", 33),
+	} {
 		rec := call(e, request(http.MethodGet, path, "127.0.0.1:18611"))
 		if rec.Code != 404 {
 			t.Errorf("GET %s = %d, want 404", path, rec.Code)
@@ -322,4 +327,3 @@ func TestHTTPServerSetsItsLimits(t *testing.T) {
 		t.Errorf("header limit %d is far above the 32 KB the engine expects", s.MaxHeaderBytes)
 	}
 }
-

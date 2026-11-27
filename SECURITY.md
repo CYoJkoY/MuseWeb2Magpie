@@ -87,6 +87,18 @@
     64 KB，一个只写不换行的子进程不再能把引擎内存拖大。`engine-go/log_test.go` 的
     `TestUnauthenticatedRequestCannotForgeALogRecord` 用免鉴权请求钉住这条。设计见
     [`docs/adr/0007-log-integrity.md`](docs/adr/0007-log-integrity.md)。
+16. **免鉴权的那一面不做活，整面都有固定的在飞上限。** `GET /login/{id}` 是唯一一个人（不是插件）
+    不带密钥就会打开的端点，所以它也是最便宜的攻击面。（1）登录 ID 在路由的匹配器里就按
+    `login_start` 发出去的形状校验（8–32 个 `[A-Za-z0-9_-]`），编出来的路径是普通 404，进不了
+    处理函数；（2）没有驱动在跑时，页面直接用 `driver.Running()` 回答「找不到这次登录」，不碰
+    `ensure()`——原本一个乱填 ID 的 GET 就能让引擎拉起一个浏览器驱动进程，还给每次请求注册一个
+    约 100 KB 的驱动事件通道；（3）每个非 health 的路由都要先取一个在飞令牌：免鉴权面 4 个、
+    持密钥面 64 个，满了直接 503 `engine_busy`（`Retry-After: 1`）而不是排队。**鉴权在取令牌
+    之前**，所以刷错密钥只能花常数时间、拿不到令牌，挤不掉真正持钥的调用；`/v1/health` 豁免，
+    因为在飞的引擎不能被答成「引擎不在」。`engine-go/admission_test.go` 把这几条都钉住：页面
+    GET 之后标记文件不存在、同一运行时下带密钥的 `POST /v1/login` 之后存在，两个预算各自打满
+    与释放，以及错密钥不占令牌。设计见
+    [`docs/adr/0008-admission-control.md`](docs/adr/0008-admission-control.md)。
 
 ## 已知残留风险
 
@@ -133,3 +145,9 @@ so a trickling body cannot pin the process.
 newlines become spaces, one record is capped at 2048 bytes) before it is written, so a request path
 — which is logged percent-decoded — cannot add a record of its own, and the driver's stderr buffer
 is capped at 64 KB so a child that never sends a newline cannot grow it without limit.
+The one route a person opens without a key — the sign-in progress page — does no work: the login id
+must have the shape `login_start` hands out or the answer is a plain 404, and with no driver running
+the page reports an unknown sign-in instead of starting a process. Every other route runs under a
+fixed in-flight budget (4 for the unauthenticated surface, 64 for keyed requests) and answers
+`503 engine_busy` with `Retry-After: 1` when it is spent; authorization is checked first, so a
+caller guessing keys holds no budget, and `/v1/health` is exempt so a busy engine never looks dead.

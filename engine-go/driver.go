@@ -225,6 +225,15 @@ func (d *driver) rememberFailure(err error) {
 	d.stateMu.Unlock()
 }
 
+// Running reports whether a driver process is up right now, without starting one. Callers that
+// answer unauthenticated requests use it to skip work entirely when nothing could be in flight:
+// reading that nothing is running costs one mutex, while ensure() would spawn a browser process.
+func (d *driver) Running() bool {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+	return d.started && d.stdin != nil
+}
+
 // retire forgets a dead generation: the next request starts a fresh driver.
 func (d *driver) retire(gone chan struct{}, cause error) {
 	d.stateMu.Lock()

@@ -23,6 +23,15 @@ const (
 	maxRequestBody    = 8 << 20
 	engineBusyRetry   = 1
 	loginLimitMinutes = 15
+	// openInFlight and keyedInFlight are the two admission budgets of the loopback surface. They
+	// exist because the listener is reachable by every local user, and a caller that never sends a
+	// key must not be able to hold unbounded work: each open request may render a page or reach the
+	// driver, and each keyed request may hold an account, a tab and a streaming response. The open
+	// budget is small because a human opens one progress page at a time; the keyed budget covers
+	// Magpie's own concurrency (one chat per account, one usage read per account) with room to
+	// spare, while a runaway loop still hits a 503 instead of the process running out of memory.
+	openInFlight  = 4
+	keyedInFlight = 64
 )
 
 type httpError struct {
@@ -216,6 +225,12 @@ type engine struct {
 	busy   map[string]bool
 	idling bool
 
+	// open and keyed are the fixed in-flight budgets described at openInFlight: a request takes a
+	// token before its handler runs and gives it back when the answer is written, so a caller that
+	// floods the port gets 503 engine_busy instead of growing the process.
+	open  chan struct{}
+	keyed chan struct{}
+
 	lastMu  sync.Mutex
 	lastUse time.Time
 
@@ -223,7 +238,29 @@ type engine struct {
 }
 
 func newEngine(cfg config, log *logger, st *store, drv *driver) *engine {
-	return &engine{cfg: cfg, log: log, store: st, drv: drv, table: routes(), busy: map[string]bool{}, lastUse: time.Now()}
+	return &engine{
+		cfg:     cfg,
+		log:     log,
+		store:   st,
+		drv:     drv,
+		table:   routes(),
+		busy:    map[string]bool{},
+		open:    make(chan struct{}, openInFlight),
+		keyed:   make(chan struct{}, keyedInFlight),
+		lastUse: time.Now(),
+	}
+}
+
+// enter takes one token from a budget without waiting. Waiting would let a flooding caller park
+// goroutines inside the handler; refusing is the honest answer, and retry: 1 tells the plugin to
+// come back rather than give up.
+func (e *engine) enter(budget chan struct{}) (func(), bool) {
+	select {
+	case budget <- struct{}{}:
+		return func() { <-budget }, true
+	default:
+		return nil, false
+	}
 }
 
 func (e *engine) touch() {
@@ -300,12 +337,15 @@ type route struct {
 	pattern string
 	match   func(path string) (string, bool)
 	auth    bool
-	handle  func(e *engine, res *response, r *http.Request, m *meta, param string) error
+	// free marks the one row that takes no admission token. Everything else runs behind a budget,
+	// because every other handler either touches the driver or holds an account.
+	free   bool
+	handle func(e *engine, res *response, r *http.Request, m *meta, param string) error
 }
 
 func routes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/v1/health", auth: false, handle: (*engine).handleHealth},
+		{method: http.MethodGet, pattern: "/v1/health", auth: false, free: true, handle: (*engine).handleHealth},
 		{method: http.MethodGet, pattern: "/v1/models", auth: true, handle: (*engine).handleModels},
 		{method: http.MethodGet, pattern: "/v1/accounts", auth: true, handle: (*engine).handleAccounts},
 		{method: http.MethodPost, pattern: "/v1/chat/completions", auth: true, handle: (*engine).handleChat},
@@ -318,12 +358,32 @@ func routes() []route {
 	}
 }
 
-// matchLoginID keeps the one rule both login paths share: a non-empty id with no slash in it.
+// matchLoginID keeps the one rule both login paths share: an id of the shape login_start hands
+// out (9 random bytes in base64url, so 12 characters of the alphabet below). Checking the shape
+// here rather than inside a handler means a made-up path is a plain 404 and never reaches the
+// driver: the progress page is unauthenticated, so only something that could be a real id is
+// allowed to ask the driver a question.
 func matchLoginID(prefix string) func(path string) (string, bool) {
 	return func(path string) (string, bool) {
 		id, ok := strings.CutPrefix(path, prefix)
-		return id, ok && id != "" && !strings.Contains(id, "/")
+		return id, ok && validLoginID(id)
 	}
+}
+
+// validLoginID is the shape rule. The bounds are wider than the current generator so the rule
+// describes an id, not one implementation of it.
+func validLoginID(id string) bool {
+	if len(id) < 8 || len(id) > 32 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		switch c := id[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // loopbackHost reports whether the request's Host header names this engine's loopback address. A
@@ -431,6 +491,20 @@ func (e *engine) route(res *response, r *http.Request, m *meta) error {
 				return err
 			}
 		}
+		// Admission comes after authorization and before the handler: a caller with a wrong key
+		// spends constant time and never holds a token, so guessing keys cannot crowd out real work,
+		// while everything that does get through runs under a fixed budget.
+		if !rt.free {
+			budget := e.keyed
+			if !rt.auth {
+				budget = e.open
+			}
+			release, ok := e.enter(budget)
+			if !ok {
+				return &httpError{status: 503, code: "engine_busy", retry: engineBusyRetry, msg: "engine is handling too many requests"}
+			}
+			defer release()
+		}
 		return rt.handle(e, res, r, m, param)
 	}
 	return fail(404, "not found", "not_found")
@@ -513,9 +587,17 @@ func (e *engine) handleLoginState(res *response, r *http.Request, m *meta, param
 }
 
 func (e *engine) handleLoginPage(res *response, r *http.Request, m *meta, param string) error {
-	state, err := e.loginState(r.Context(), param)
-	if err != nil {
-		state = nil
+	// This page is the one place a person — not the plugin — reaches the port without a key, so it
+	// is also the cheapest thing to flood. It answers without doing any work: when no driver is up
+	// nobody can be signing in, and when one is, reading its state costs a question on an open pipe.
+	// Nothing here starts a process, so a stranger's GETs cannot turn this port into a browser
+	// launcher (e.drv.ensure would spawn one) or allocate a per-request driver stream.
+	var state json.RawMessage
+	if e.drv.Running() {
+		got, err := e.loginState(r.Context(), param)
+		if err == nil {
+			state = got
+		}
 	}
 	// The progress page is opened by a person in their own browser, driven by a URL that
 	// carries a login id: keep it out of frames, out of caches and out of any third-party
