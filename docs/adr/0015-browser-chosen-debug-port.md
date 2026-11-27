@@ -102,3 +102,27 @@ the engine dies before any address rule runs. A timeout bounds the wait, not the
   announced 8 GiB body is refused from the announcement, an endless body is cut off at the ceiling
   with the reader cancelled, a body within the ceiling that is not JSON gets its own reason, a
   normal answer still parses, and `openChat()` is bounded by the same rule.
+
+## Revision: a start that never opens its port says why (`0.12.4`)
+
+The wait for `DevToolsActivePort` was 30 s, and its failure was one sentence: `browser did not open
+its debugging port: ${last?.message ?? "timeout"}`. The `test` workflow failed twice on that same
+sentence for the same commit — `timeout` on windows-latest (no usable file for 30 s, process still
+alive) and `The operation was aborted` on ubuntu-latest (file present, every 1.5 s probe cut) —
+while the other two platforms were green and the same test finishes in 1.7 s locally. The launch
+that failed is the first real one of the whole job, which is the slowest launch there is.
+
+- The default budget is `START_BUDGET_MS` (60 s), and `MUSE_WEB_START_MS` raises it for a machine
+  slower still. A value that is not a usable number of milliseconds leaves the default alone.
+- Each `/json/version` probe gets what is left of the budget rather than a fixed 1.5 s, so `waitMs`
+  is the ceiling it claims to be: the old 30 s budget could run to 33 s before giving up.
+- `startTimeout()` builds the failure from the facts that separate the cases — how long the engine
+  waited, whether `DevToolsActivePort` is still missing or what it holds (200 bytes at most), the
+  last probe's answer, and the browser's last three stderr lines. `startFailure()` shares that
+  stderr tail, so both ways a start can fail report the same way.
+- `test/browser-start.test.ts` pins the message matrix, the budget rules, and a POSIX-only stall
+  (a fake browser that stays alive without writing the file) so the loop is exercised without a
+  browser. The real-browser recovery test's deadline follows the budget to 180 s.
+
+A retry inside the test would have made the run green without saying anything about the cause; the
+budget and the message are what make the next occurrence either not happen or explain itself.

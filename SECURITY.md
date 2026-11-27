@@ -183,8 +183,12 @@
     带流时边读边计数、到顶 `cancel()`，上限 `MAX_DEVTOOLS_BYTES`（1 MiB，真实浏览器的答复是
     几 KB）。抢占端口的人不必冒充 CDP，只要会写 HTTP 就能用一段永不结束的正文把引擎撑死；
     地址校验要等整份答复到手才跑得起来，所以这道上限在字节到达时生效，而不是之后。
+    等这个文件的时间同样是有限的：默认 `START_BUDGET_MS`（60 s，`MUSE_WEB_START_MS` 可调），
+    每次探测只花预算里剩下的时间；超时的报错写明等了多久、端口文件是缺失还是写着什么、
+    最后一次探测的回答与浏览器 stderr 的最后三行——「慢」和「端口被别的东西占着」只有这些
+    事实分得开，一句 `timeout` 分不开。
     测试见 `test/browser-recovery.test.ts`、`test/login-target.test.ts`、
-    `test/devtools-bounded.test.ts`。设计见
+    `test/devtools-bounded.test.ts`、`test/browser-start.test.ts`。设计见
     [`docs/adr/0015-browser-chosen-debug-port.md`](docs/adr/0015-browser-chosen-debug-port.md)。
 
 ## 已知残留风险
