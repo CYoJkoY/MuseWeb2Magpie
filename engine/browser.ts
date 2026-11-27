@@ -1,5 +1,5 @@
 // Find and start a Chromium-family browser on macOS, Windows or Linux.
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import path from "node:path"
@@ -264,7 +264,53 @@ function stderrTail(stderr: string): string {
 function startFailure({ code, signal, stderr }: { code: number | null; signal: string | null; stderr: string }): Error {
   const status = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
   const detail = stderrTail(stderr)
-  return new Error(`browser exited during start (${status})${detail ? `: ${detail}` : ""}`)
+  const err: Error & { stderr?: string } = new Error(`browser exited during start (${status})${detail ? `: ${detail}` : ""}`)
+  // The tail above is what a person reads; this copy is what the caller reads to tell a licence
+  // prompt from a broken install, and it has to keep the whole message.
+  err.stderr = stderr
+  return err
+}
+
+// A kernel that ships inside another browser (Donut Browser's Wayfern) will not run until it has
+// been told the licence is accepted, and it says so on stderr instead of opening a window. The
+// request spans three lines, so it is looked for in the whole text rather than the tail above:
+// this reason must not be reported as a broken install.
+export const TERMS_FLAG = "--accept-terms-and-conditions"
+
+export function termsRequired(said: string): boolean {
+  return String(said || "").includes(TERMS_FLAG)
+}
+
+// Accepting a licence is the person's decision, so there is a switch that keeps the engine out of
+// it. Only an explicit "no" counts: an empty or unset value leaves the default alone.
+export function termsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(0|off|no|false)$/i.test(String(env.MUSE_WEB_ACCEPT_TERMS || "").trim())
+}
+
+// The kernel records the answer and exits; the start that follows is the one that opens a port.
+export function acceptTerms(executable: string, timeoutMs = 30_000): { ok: boolean; said: string } {
+  try {
+    const run = spawnSync(executable, [TERMS_FLAG], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMs,
+      windowsHide: true,
+      encoding: "utf8",
+    })
+    const said = String(run.stderr || "").trim() || String(run.stdout || "").trim()
+    return { ok: run.status === 0, said }
+  } catch (err: any) {
+    return { ok: false, said: String(err?.message || err) }
+  }
+}
+
+// A machine that still refuses gets the one command that fixes it, quoted so a path with spaces
+// survives a copy and paste, plus the switch that stops the engine trying this on its own.
+export function termsError(executable: string, said: string): Error {
+  const detail = stderrTail(said)
+  return new Error("打不开浏览器：这个浏览器内核要先接受使用条款才能启动。请在命令行运行一次："
+    + `"${executable}" ${TERMS_FLAG}`
+    + "（也可以用 MUSE_WEB_ACCEPT_TERMS=0 关掉自动接受）"
+    + (detail ? `。浏览器说：${detail}` : ""))
 }
 
 // A start that never opens its port used to say only "timeout" — on a loaded runner that named
@@ -320,9 +366,31 @@ export interface LaunchOptions {
   url?: string
   waitMs?: number
   extraArgs?: string[]
+  env?: NodeJS.ProcessEnv
 }
 
-export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", waitMs = startBudget(), extraArgs = [] }: LaunchOptions): Promise<Launched> {
+// A kernel that asks for its licence before it will run would otherwise fail the sign-in on a
+// machine that has simply never started it. Accepting once and starting again keeps the promise
+// this function's name makes, and it is a single extra start rather than a loop.
+export async function launchBrowser(options: LaunchOptions): Promise<Launched> {
+  const env = options.env ?? process.env
+  const start = () => launchOnce({ ...options, waitMs: options.waitMs ?? startBudget(env) })
+  try {
+    return await start()
+  } catch (err: any) {
+    const said = String(err?.stderr || "")
+    if (!termsRequired(said)) throw err
+    if (termsDisabled(env)) throw termsError(options.executable, said)
+    const accepted = acceptTerms(options.executable)
+    if (!accepted.ok) throw termsError(options.executable, accepted.said || said)
+    // A start that suddenly works after an install is the sort of thing worth one line: it is the
+    // difference between the engine and the browser each doing what the person expects.
+    console.error("MuseWeb2Magpie: accepted the browser kernel's terms and started it again")
+    return await start()
+  }
+}
+
+async function launchOnce({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", waitMs = startBudget(), extraArgs = [] }: LaunchOptions): Promise<Launched> {
   if (!executable) {
     throw new Error("没找到可用的浏览器：本机没有 Donut Browser 和内嵌的 Wayfern 内核，开源指纹浏览器 Apostate 也没能下载，"
       + "本机也没有 Chrome、Edge 或 Chromium；联网后重试，或用 MUSE_WEB_DONUT_BROWSER / MUSE_WEB_FINGERPRINT_BROWSER"
