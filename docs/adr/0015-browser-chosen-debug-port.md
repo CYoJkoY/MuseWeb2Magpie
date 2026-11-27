@@ -56,3 +56,26 @@ trusted.
   port 0, non-numeric, out of range, oversized), the address check (right port, wrong port, not
   loopback, page target, plain http, junk), and that the engine asks for port 0. The existing
   recovery test starts a real Chromium through the new path.
+
+## Revision: the page target follows the same rule (`0.12.2`)
+
+The decision above covers the answer `/json/version` gives. The engine also asks that port for
+`/json/list`, from the sign-in poll, and it used to connect to whatever `webSocketDebuggerUrl`
+the first page target named. That is the same squatter one step later: the sign-in window is open
+for minutes, so the browser can be gone when the poll asks, and whoever binds the port next
+answers the list. The engine would then open a CDP session to an address of that process's
+choosing and send `Page.navigate` down it.
+
+- `endpointUrl()` now holds the one check - `ws:`/`wss:`, loopback host, the exact port, and a path
+  prefix. `debuggerUrl()` is that check with `/devtools/browser/`, the new `pageUrl()` with
+  `/devtools/page/`.
+- `chatTarget()` in `engine/login.ts` picks the target: a page whose address passes `pageUrl()` for
+  this port, preferring the tab on the configured site, and `openChat()` connects only to that.
+  A list with no such page sends nothing and leaves a note on the sign-in run, so a taken port
+  reads as an explanation instead of a timeout.
+- `test/login-target.test.ts` pins the hijacked list (other port, LAN host, browser endpoint, plain
+  http, junk, no address), the site preference, non-page targets, and answers that are not lists.
+  `test/browser-recovery.test.ts` pins the `pageUrl()` matrix next to the `debuggerUrl()` one.
+
+Nothing changes for a healthy browser: it answers `ws://127.0.0.1:<port>/devtools/page/<id>`,
+which passes unchanged.
