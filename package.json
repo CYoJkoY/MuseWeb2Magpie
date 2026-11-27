@@ -1,6 +1,6 @@
 {
   "name": "magpie-muse-web",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Magpie provider plugin for muse.ai: sign in to each account in a browser window, use Muse Spark with tool calls in Codex, OpenCode and other agents, and see each account's weekly usage",
   "type": "module",
   "main": "./index.ts",
@@ -8,7 +8,6 @@
   "files": [
     "index.ts",
     "engine/",
-    "engine-go/bin/",
     "assets/",
     "icon.svg",
     "README.md",
@@ -17,10 +16,6 @@
   ],
   "scripts": {
     "test": "node --test --test-concurrency=1 contract.test.ts \"test/*.test.ts\" connector/contract.test.ts connector/security.test.ts",
-    "pretest": "npm run build:engine",
-    "build:engine": "node tools/build-engine.ts",
-    "test:go": "go -C engine-go test ./...",
-    "bench": "go -C engine-go test -bench . -benchmem ./...",
     "typecheck": "tsc --noEmit",
     "no-javascript": "node tools/no-javascript.ts"
   },

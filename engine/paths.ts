@@ -54,3 +54,9 @@ export function engineKey(dir: string): string {
   writePrivate(file, key + "\n")
   return key
 }
+
+// Hex, not base64url: the shapes that carry it (handles, login ids, chat ids) are read by people
+// in logs and URLs, and hex never needs escaping.
+export function randomHex(n: number): string {
+  return randomBytes(n).toString("hex")
+}

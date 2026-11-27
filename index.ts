@@ -34,12 +34,11 @@ const ICON = (() => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-function bundledEngine() {
-  const platform = process.platform === "win32" ? "windows" : process.platform
-  const binary = platform === "windows" ? "muse-web-engine.exe" : "muse-web-engine"
-  const arch = ({ x64: "amd64", ia32: "386" } as Record<string, string>)[process.arch] || process.arch
-  return path.join(HERE, "engine-go", "bin", `${platform}-${arch}`, binary)
-}
+// The engine is the plugin's own TypeScript now, run by the same Node that runs the plugin — no
+// prebuilt binary to ship or to miss. An installation that predates this still works through
+// MUSE_WEB_ENGINE_BIN, which names a native engine to run instead.
+const ENGINE_ENTRY = path.join(HERE, "engine", "main.ts")
+const ENGINE_DRIVER = path.join(HERE, "engine", "driver.ts")
 
 // An engine at least as new as this plugin is kept: a Magpie that has not reloaded the plugin
 // yet must not keep replacing the engine a newer copy of the plugin started.
@@ -192,16 +191,21 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
         trouble = siteWhy
         return false
       }
-      const binary = String(process.env.MUSE_WEB_ENGINE_BIN || bundledEngine()).trim()
-      if (!existsSync(binary)) throw new Error(`muse-web engine binary not found: ${binary}`)
-      const child = spawn(binary, [], {
+      // A native engine named explicitly is run instead; otherwise the plugin runs its own
+      // TypeScript entry with this same Node, so a source-only install has everything it needs.
+      const named = String(process.env.MUSE_WEB_ENGINE_BIN || "").trim()
+      if (named && !existsSync(named)) throw new Error(`muse-web engine binary not found: ${named}`)
+      if (!named && !existsSync(ENGINE_ENTRY)) {
+        throw new Error(`muse-web 引擎入口缺失：${ENGINE_ENTRY}（插件安装不完整，请重新安装 magpie-muse-web）`)
+      }
+      const child = spawn(named || process.execPath, named ? [] : [ENGINE_ENTRY], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
         env: {
           ...process.env,
           MUSE_WEB_NODE: process.execPath,
-          MUSE_WEB_DRIVER: path.join(HERE, "engine", "driver.ts"),
+          MUSE_WEB_DRIVER: ENGINE_DRIVER,
           MUSE_WEB_PARENT_PID: String(process.pid),
         },
       })

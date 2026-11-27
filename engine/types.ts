@@ -29,6 +29,7 @@ export interface SavedAccount {
   expires: number | null
   label: string
   again?: boolean
+  account?: Account
 }
 
 // One meter from Settings → Usage.

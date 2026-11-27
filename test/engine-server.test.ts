@@ -1,18 +1,18 @@
 import { after, before, describe, test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { healthProof } from "../engine/health.ts"
+import { VERSION } from "../engine/version.ts"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, "..")
-const platform = process.platform === "win32" ? "windows" : process.platform
-const arch = ({ x64: "amd64", ia32: "386" } as Record<string, string>)[process.arch] || process.arch
-const BINARY = path.join(ROOT, "engine-go", "bin", `${platform}-${arch}`, platform === "windows" ? "muse-web-engine.exe" : "muse-web-engine")
+// The engine is the plugin's own TypeScript, run by this same Node; there is no binary to build.
+const ENTRY = path.join(ROOT, "engine", "main.ts")
 
 const ACCOUNTS = {
   "good-account": {
@@ -46,7 +46,7 @@ function sseEvents(raw: string): any[] {
     .map((line) => JSON.parse(line.slice(6)))
 }
 
-describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${BINARY}; run npm run build:engine`, timeout: 120_000 }, () => {
+describe("muse-web engine over HTTP", { timeout: 120_000 }, () => {
   let child: ChildProcessWithoutNullStreams
   let home = ""
   let key = ""
@@ -85,7 +85,7 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
       MUSE_WEB_VERIFY_LOGIN: "0",
       MUSE_WEB_SITE: "http://127.0.0.1:9",
     })
-    child = spawn(BINARY, [], { env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
+    child = spawn(process.execPath, [ENTRY], { env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
     child.stdout.on("data", (data) => { logs += data.toString() })
     child.stderr.on("data", (data) => { logs += data.toString() })
     exit = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })))
@@ -110,6 +110,7 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
     }
     if (child && child.exitCode === null) child.kill()
     if (home) rmSync(home, { recursive: true, force: true })
+    if (process.env.MUSE_WEB_TEST_TRACE) console.log("ENGINE LOG:\n" + logs)
   })
 
   test("serves health, models, accounts, and rejects a bad key", async () => {
@@ -119,7 +120,7 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
     const health = await jsonOf(healthRes)
     assert.equal(health.status, 200)
     assert.equal(health.body.engine, "muse-web")
-    assert.equal(health.body.version, "0.11.0")
+    assert.equal(health.body.version, VERSION)
     // The unauthenticated answer says only that an engine is up and which version; the account
     // count lives behind the key at /v1/accounts.
     assert.equal(health.body.accounts, undefined)

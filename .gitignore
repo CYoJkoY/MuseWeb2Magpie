@@ -1,6 +1,5 @@
 .DS_Store
 node_modules/
-engine-go/bin/
 *.log
 *.tgz
 *.prof
