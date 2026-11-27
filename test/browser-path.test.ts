@@ -42,5 +42,7 @@ test("a typed browser path must be absolute and name a file", () => {
 
 test("a Windows path is still absolute on Windows", { skip: process.platform !== "win32" }, () => {
   // Only checked where the answer is unambiguous: on POSIX, "C:\…" is a relative path.
-  assert.match(browserPathProblem("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe") ?? "", /不存在/)
+  // The path must be one no runner has: the GitHub Windows image ships Chrome, so naming
+  // Chrome would test whether Chrome is installed instead of whether the path is judged.
+  assert.match(browserPathProblem("C:\\Program Files\\MuseWeb2Magpie Missing Browser\\chrome.exe") ?? "", /不存在/)
 })
