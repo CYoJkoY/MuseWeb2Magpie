@@ -78,6 +78,15 @@
 14. **`/v1/health` 只回答最少的信息。** 这是免鉴权端点，任何本机用户都能问，所以它只说「引擎在、
     哪个版本」，不再返回账号数（账号数在密钥之后的 `/v1/accounts`）。`engine-go/server_test.go`
     的 `TestHealthDoesNotCountAccounts` 守住这条。
+15. **一行一条日志，谁都伪造不了。** `engine-go/config.go` 的 `logger.Log()` 是写 `engine.log`
+    的唯一出口，每条记录先过 `oneLine()`：`\r`、`\n`、`\t`、其余 C0 控制字符、DEL 以及
+    U+2028 / U+2029 一律换成空格，单条上限 2048 字节。请求路径写进日志时是百分号解码后的样子，
+    所以一个**不带密钥**的本机请求原本可以用 `%0A` 往 `engine.log` 里接一条
+    「200 GET /v1/accounts account=…」——读日志的人分不出真假。现在客户端给的路径、驱动来的消息、
+    子进程 stderr 都不可能多出一行。驱动 stderr 的 `lineWriter` 同时把「还没等到换行」的缓冲限制在
+    64 KB，一个只写不换行的子进程不再能把引擎内存拖大。`engine-go/log_test.go` 的
+    `TestUnauthenticatedRequestCannotForgeALogRecord` 用免鉴权请求钉住这条。设计见
+    [`docs/adr/0007-log-integrity.md`](docs/adr/0007-log-integrity.md)。
 
 ## 已知残留风险
 
@@ -120,3 +129,7 @@ plugin pointed at a named engine on a plain-http address other than this machine
 them and reports the transport rule instead. `/v1/health` says only that an engine is up and its
 version — not how many accounts live behind the key — and the listener sets a request `ReadTimeout`
 so a trickling body cannot pin the process.
+`engine.log` holds one record per line: every record passes `oneLine()` (control characters and
+newlines become spaces, one record is capped at 2048 bytes) before it is written, so a request path
+— which is logged percent-decoded — cannot add a record of its own, and the driver's stderr buffer
+is capped at 64 KB so a child that never sends a newline cannot grow it without limit.

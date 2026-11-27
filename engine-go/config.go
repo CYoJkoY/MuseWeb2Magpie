@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -28,6 +29,12 @@ const (
 	defaultPort = 18611
 	// engine.log is a tail, not an archive: it is rolled over once when it passes this size.
 	logLimit = 5 << 20
+	// logLineLimit bounds one record. Browser and driver messages can be long; the log is a tail
+	// for diagnosis, so a single record never needs more than this.
+	logLineLimit = 2048
+	// maxDriverLine bounds how much of a driver message is held before its newline arrives. A child
+	// that keeps writing without one would otherwise grow that buffer for as long as it runs.
+	maxDriverLine = 64 << 10
 )
 
 // essentialCookies are the two muse.ai cookies that mean "signed in".
@@ -202,6 +209,36 @@ func timeString() string {
 	return time.Now().Format("15:04:05")
 }
 
+// oneLine makes text safe to append as one log record: no control characters, and no newlines.
+// A request path arrives percent-decoded, so a path can carry a "\n"; an error text from a proxy
+// or a page can carry anything at all. Without this rule an unauthenticated request could append a
+// record of its own to engine.log — a line reading "200 GET /v1/accounts account=muse-…" that
+// never happened — and whoever reads the log could not tell it from a real one.
+func oneLine(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if b.Len() >= logLineLimit {
+			b.WriteString("...")
+			break
+		}
+		switch {
+		case r == '\t':
+			// A tab would still be one line, but it moves the columns a reader aligns on.
+			b.WriteByte(' ')
+		case r < 0x20 || r == 0x7f:
+			// \r and \n are what a forged record needs; the rest of C0 and DEL are what a
+			// terminal escape sequence starts with. All of them become a space.
+			b.WriteByte(' ')
+		case r == '\u2028' || r == '\u2029':
+			// The line separators JSON and JavaScript also count as newlines.
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // isoMillis is the shape JSON clients expect from a millisecond timestamp.
 func isoMillis(ms int64) string {
 	return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")
@@ -219,7 +256,9 @@ func newLogger(dir string, out io.Writer) *logger {
 }
 
 func (l *logger) Log(format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
+	// Every record goes through oneLine here, so the rule holds for request lines, driver
+	// messages and a child process's stderr alike — there is no other path into the file.
+	line := oneLine(fmt.Sprintf(format, args...))
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.out != nil {
@@ -248,7 +287,7 @@ type lineWriter struct {
 func (w *lineWriter) Write(p []byte) (int, error) {
 	w.buf = append(w.buf, p...)
 	for {
-		at := strings.IndexByte(string(w.buf), '\n')
+		at := bytes.IndexByte(w.buf, '\n')
 		if at < 0 {
 			break
 		}
@@ -257,6 +296,12 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		if line != "" {
 			w.log.Log("%s", line)
 		}
+	}
+	// A child that writes without ever sending a newline would otherwise grow this buffer for as
+	// long as it runs. The partial line is worthless for diagnosis, so it is dropped, not kept.
+	if len(w.buf) > maxDriverLine {
+		w.log.Log("%s driver: dropped %d bytes of an unfinished line", timeString(), len(w.buf))
+		w.buf = nil
 	}
 	return len(p), nil
 }
