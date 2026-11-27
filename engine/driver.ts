@@ -9,6 +9,7 @@ import { AuthError, Muse, PromptTooLongError, QuotaError, redact, renewSession }
 import { proxiedFetch, resolveProxy } from "./net.ts"
 import { dataDir } from "./paths.ts"
 import { buildPrompt, PromptError } from "./prompt.ts"
+import { siteOrDefault, siteProblem } from "./site.ts"
 import { functions, parseToolCalls, stripLabels, TOOLS_REMINDER, toolChoiceRequired, toolChoiceSatisfied, toolsPrompt } from "./tools.ts"
 import { VERSION } from "./version.ts"
 
@@ -77,7 +78,13 @@ async function verifyAccount(account: any, tries = 3) {
   throw last
 }
 
-const site = (env.MUSE_WEB_SITE || "https://muse.ai").replace(/\/+$/, "")
+// The site receives the account's cookies, so a value that cannot be carried safely is refused
+// here rather than discovered later by a browser showing an error page. The plugin checks the same
+// thing before it starts this engine (one predicate, both callers, like the typed browser path);
+// this side is the one that matters when the engine is started by hand.
+const siteTrouble = siteProblem(env.MUSE_WEB_SITE)
+const site = siteOrDefault(env.MUSE_WEB_SITE)
+if (siteTrouble) log(`muse-web: ${siteTrouble}`)
 const proxy = resolveProxy(env)
 const fetchImpl = proxiedFetch(proxy)
 const fallbackExecutable = findBrowser(env)
@@ -275,6 +282,12 @@ function serve(line: string) {
     running.get(id)?.abort?.()
     return
   }
+  // Nothing that would talk to a bad site may run. The two ops that only stop things keep
+  // working: closing a sign-in window is not a reason to leave the engine stuck with a bad config.
+  if (siteTrouble && op !== "stop" && op !== "login_stop_all") {
+    fail(id, Object.assign(new Error(siteTrouble), { kind: "invalid_request" }))
+    return
+  }
   const run = operations[op]
   if (!run) {
     fail(id, new Error(`unknown op: ${op}`))
@@ -387,7 +400,9 @@ function main() {
   })
   reader.on("close", close)
   send({ ev: "ready", version: VERSION })
-  prepareBrowser().catch(() => {})
+  // With a site that cannot be used, preparing a browser is work done for a request that will be
+  // refused, and the fingerprint browser may be a download.
+  if (!siteTrouble) prepareBrowser().catch(() => {})
 }
 
 main()

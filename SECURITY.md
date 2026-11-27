@@ -109,6 +109,15 @@
     与首尾空白先由 `normalizeBrowserPath()` 去掉，不成对的引号保持原样、照旧被拒。测试见
     `test/browser-path.test.ts` 与 `contract.test.ts`。设计见
     [`docs/adr/0009-typed-browser-path.md`](docs/adr/0009-typed-browser-path.md)。
+18. **配置的站点遵循凭据的传输规则。** `MUSE_WEB_SITE` 决定 muse.ai 会话 cookie 发到哪个源：
+    浏览器每次加载页面都带着它，`muse.ts` 的每个 API 调用都把它发给同一个源。会话 cookie 是
+    凭据，所以它跟 `engine.key` 走同一条规则（ADR 0006）：明文 http 只能到本机回环，其他地方
+    必须 https。`engine/site.ts` 的 `siteProblem()` 是唯一的判断，插件在拉起引擎之前调用
+    （`index.ts` 的 `ensureEngine()`），引擎驱动在启动时调用一次（`engine/driver.ts`），
+    未修正之前只回答原因、不做任何工作（包括不下载指纹浏览器），只有两个停止操作例外——
+    让引擎能被干净地关掉。镜像站照旧可以指向回环（`http://127.0.0.1:3000`），真实站点默认
+    不需要配置。测试见 `test/site.test.ts`。设计见
+    [`docs/adr/0010-configured-site-transport.md`](docs/adr/0010-configured-site-transport.md)。
 
 ## 已知残留风险
 

@@ -7,6 +7,7 @@ import { browserOptions, browserPathProblem, normalizeBrowserPath } from "./engi
 import { findFingerprintBrowser, findWayfernBrowser, isWayfernBrowser } from "./engine/fingerprint.ts"
 import { CHALLENGE_HEADER, healthChallenge, provesHealth } from "./engine/health.ts"
 import { anyFetch, credentialSafeUrl } from "./engine/local-fetch.ts"
+import { siteProblem } from "./engine/site.ts"
 import { VERSION } from "./engine/version.ts"
 
 const PROVIDER = "muse-web"
@@ -180,6 +181,15 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
         // key — typically an engine from before this check that is still running after an upgrade.
         // Do not spawn (the port is taken) and do not send it the key; the person restarts Magpie.
         trouble = `端口 ${enginePort()} 已被别的进程占用，而且它无法证明自己持有 engine.key（常见于升级后仍在运行的旧版引擎）。请重启 Magpie，或结束占用该端口的进程。`
+        return false
+      }
+      // The site decides where this account's cookies go. A mirror named over plain http on
+      // another machine would put them on the wire in clear, so no engine is started for it and
+      // the reason is what the person sees. The driver refuses the same value itself, which is
+      // what covers a hand-started engine; this check is the one that can say it in Magpie.
+      const siteWhy = siteProblem(process.env.MUSE_WEB_SITE)
+      if (siteWhy) {
+        trouble = siteWhy
         return false
       }
       const binary = String(process.env.MUSE_WEB_ENGINE_BIN || bundledEngine()).trim()

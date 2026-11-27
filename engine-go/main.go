@@ -36,7 +36,6 @@ type config struct {
 	dir         string
 	port        int
 	key         string
-	site        string
 	idle        time.Duration
 	prewarm     bool
 	verifyLogin bool
@@ -56,7 +55,6 @@ func loadConfig() (config, error) {
 	return config{
 		dir:         resolveDataDir(os.Getenv, runtime.GOOS, home),
 		port:        resolvePort(os.Getenv),
-		site:        strings.TrimRight(envValue(os.Getenv, "MUSE_WEB_SITE", "https://muse.ai"), "/"),
 		idle:        time.Duration(idleMinutes * float64(time.Minute)),
 		prewarm:     os.Getenv("MUSE_WEB_PREWARM") != "0",
 		verifyLogin: os.Getenv("MUSE_WEB_VERIFY_LOGIN") != "0",
