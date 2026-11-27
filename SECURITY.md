@@ -159,6 +159,18 @@
     完成后统计实际产物，超预算就报失败，调用方原有的清理会丢掉整个 staging 目录。测试见
     `test/fingerprint.test.ts`。设计见
     [`docs/adr/0014-bounded-extraction.md`](docs/adr/0014-bounded-extraction.md)。
+23. **调试端口由浏览器自己选。** 原来 `freePort()` 先绑一个 `127.0.0.1:0`、拿到端口、关掉
+    监听，再把这个号码交给浏览器；在这两步之间，本机任何进程都能先绑上同一个端口，回答引擎
+    的 `/json/version` 探测，并拿到一条带着账号 cookie 的 CDP 连接——这条连接本身就是凭据，
+    没有 `engine.key` 那样的挑战可以自证。现在 `launchBrowser()` 传
+    `--remote-debugging-port=0`，由浏览器自己挑端口并在监听就绪后写进
+    `<profileDir>/DevToolsActivePort`，引擎只读这个文件：`readActivePort()` 拒绝超过 4096 字节
+    的文件、不在 `1..65535` 的首行、以及第二行不以 `/devtools/browser/` 开头的文件；
+    启动前先删掉 profile 里遗留的旧文件，避免把上一轮浏览器的端口当成这一轮的答案；
+    `debuggerUrl()` 还要求 `/json/version` 回的地址是 `ws:`/`wss:`、端口与文件一致、主机是
+    回环（`127.0.0.1`、`::1`、`localhost`）、路径在 `/devtools/browser/` 下，否则继续等。
+    测试见 `test/browser-recovery.test.ts`。设计见
+    [`docs/adr/0015-browser-chosen-debug-port.md`](docs/adr/0015-browser-chosen-debug-port.md)。
 
 ## 已知残留风险
 

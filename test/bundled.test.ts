@@ -6,10 +6,11 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import http from "node:http"
+import net from "node:net"
 import { VERSION } from "../engine/version.ts"
 import os from "node:os"
 import path from "node:path"
-import { findBrowser, freePort } from "../engine/browser.ts"
+import { findBrowser } from "../engine/browser.ts"
 import { healthProof } from "../engine/health.ts"
 import { anyFetch } from "../engine/local-fetch.ts"
 import { MuseWebPlugin } from "../index.ts"
@@ -20,6 +21,18 @@ const skip = findBrowser() ? false : "no Chrome/Edge/Chromium installed"
 // the key the plugin will look for; the real engine reuses this same file afterwards.
 const OLD_KEY = "old-engine-key-for-the-bundled-test"
 let fake, home, port, hooks
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.unref()
+    server.on("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as any).port
+      server.close(() => resolve(port))
+    })
+  })
+}
 
 async function stopEngine() {
   const key = readFileSync(path.join(home, "engine.key"), "utf8").trim()

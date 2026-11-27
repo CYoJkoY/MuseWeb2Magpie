@@ -1,8 +1,7 @@
 // Find and start a Chromium-family browser on macOS, Windows or Linux.
 import { spawn, type ChildProcess } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync } from "node:fs"
 import { rm } from "node:fs/promises"
-import { createServer } from "node:net"
 import path from "node:path"
 import { CDP, httpJSON } from "./cdp.ts"
 import { proxyForBrowser } from "./net.ts"
@@ -101,15 +100,44 @@ export function browserOptions(env: NodeJS.ProcessEnv = process.env, platform = 
   return out
 }
 
-export function freePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const server = createServer()
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address() as { port: number }
-      server.close(() => resolve(port))
-    })
-  })
+// The debugging port is the browser's to choose. Asking the OS for a free port and handing it to
+// the browser leaves a window in which any local process can take that port first, answer the
+// /json/version probe with its own WebSocket address, and then receive the CDP connection that
+// carries the account's cookies. Chromium writes <profileDir>/DevToolsActivePort once its own
+// listener is up — the port it actually owns, and the browser path it serves — so the engine
+// reads the port from there instead of guessing one.
+export function readActivePort(dir: string): number {
+  let text = ""
+  try {
+    text = readFileSync(path.join(dir, "DevToolsActivePort"), "utf8")
+  } catch {
+    return 0
+  }
+  // The file is two short lines; anything larger is not the file this function expects.
+  if (text.length > 4096) return 0
+  const [first, second] = text.split(/\r?\n/)
+  const port = Number(first)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return 0
+  // The second line is the browser's own WebSocket path; without it this is not Chrome's file.
+  if (!String(second || "").startsWith("/devtools/browser/")) return 0
+  return port
+}
+
+// The debugger address this browser is actually serving, or null. The port came from the
+// browser's own file, so the answer on it has to point back at that same port on loopback with a
+// browser path; anything else is a different listener that happened to hold the port.
+export function debuggerUrl(value: unknown, port: number): string | null {
+  try {
+    const url = new URL(String(value || ""))
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") return null
+    if (url.port !== String(port)) return null
+    const host = url.hostname.replace(/^\[|\]$/g, "")
+    if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") return null
+    if (!url.pathname.startsWith("/devtools/browser/")) return null
+    return url.toString()
+  } catch {
+    return null
+  }
 }
 
 // proxy: "" leaves the browser on the system's own setting, "direct" ignores it, a URL forces it.
@@ -223,31 +251,33 @@ export interface LaunchOptions {
   hidden?: boolean
   proxy?: string
   url?: string
-  port?: number
   waitMs?: number
   extraArgs?: string[]
 }
 
-export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", port, waitMs = 30_000, extraArgs = [] }: LaunchOptions): Promise<Launched> {
+export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", waitMs = 30_000, extraArgs = [] }: LaunchOptions): Promise<Launched> {
   if (!executable) {
     throw new Error("没找到可用的浏览器：本机没有 Donut Browser 和内嵌的 Wayfern 内核，开源指纹浏览器 Apostate 也没能下载，"
       + "本机也没有 Chrome、Edge 或 Chromium；联网后重试，或用 MUSE_WEB_DONUT_BROWSER / MUSE_WEB_FINGERPRINT_BROWSER"
       + " / MUSE_WEB_CHROME 指定一个可执行文件")
   }
   mkdirSync(profileDir, { recursive: true })
-  port ??= await freePort()
   // Cookies are restored from the account store. A fresh profile also isolates us
   // from a browser left alive by a crashed engine or an asynchronous shutdown.
   if (temporary) {
     sweepProfiles(profileDir)
     profileDir = mkdtempSync(path.join(profileDir, "run-"))
   }
+  // A file left behind by an earlier browser names a port this one does not own; the browser
+  // writes its own as soon as its listener is up, and trusting the old one would hand the
+  // connection to whoever holds that port now.
+  rmSync(path.join(profileDir, "DevToolsActivePort"), { force: true })
   const cleanup = async () => {
     if (temporary) await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {})
   }
   let proc: ChildProcess
   try {
-    proc = spawn(executable, browserArgs({ port, profileDir, headless, hidden, proxy, url, extraArgs }), {
+    proc = spawn(executable, browserArgs({ port: 0, profileDir, headless, hidden, proxy, url, extraArgs }), {
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: headless || hidden,
     })
@@ -285,14 +315,19 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
       await close()
       throw spawnError || startFailure({ ...exitInfo, stderr })
     }
-    try {
-      const v = await httpJSON(`http://127.0.0.1:${port}/json/version`, 1500)
-      if (v?.webSocketDebuggerUrl) {
-        const browser = await CDP.connect(v.webSocketDebuggerUrl)
-        return { proc, port, browser, profileDir, close: () => close(browser) }
+    const active = readActivePort(profileDir)
+    if (active) {
+      try {
+        const v = await httpJSON(`http://127.0.0.1:${active}/json/version`, 1500)
+        const ws = debuggerUrl(v?.webSocketDebuggerUrl, active)
+        if (ws) {
+          const browser = await CDP.connect(ws)
+          return { proc, port: active, browser, profileDir, close: () => close(browser) }
+        }
+        last = new Error(`port ${active} did not answer as this browser's debugger`)
+      } catch (err) {
+        last = err
       }
-    } catch (err) {
-      last = err
     }
     await new Promise<void>((r) => setTimeout(r, 250))
   }

@@ -1,14 +1,68 @@
 import { test } from "node:test"
 // @ts-nocheck
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { browserCandidates, browserOptions, findBrowser, launchBrowser, sweepProfiles } from "../engine/browser.ts"
+import { browserArgs, browserCandidates, browserOptions, debuggerUrl, findBrowser, launchBrowser, readActivePort, sweepProfiles } from "../engine/browser.ts"
 import { Muse } from "../engine/muse.ts"
 
 const executable = findBrowser()
+
+test("the debugger port comes from the file the browser writes, never from a guess", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mw-active-"))
+  const file = path.join(root, "DevToolsActivePort")
+  const write = (text: string) => writeFileSync(file, text)
+  try {
+    // Nothing yet: the browser has not opened its listener.
+    assert.equal(readActivePort(root), 0)
+    write("9333\n/devtools/browser/2f8a1c0e-6a0d-4f43-9d1c-2b3c1a0f9e77\n")
+    assert.equal(readActivePort(root), 9333)
+    // Chromium writes \n on every platform, but a file that arrives with \r\n still parses.
+    write("9333\r\n/devtools/browser/x\r\n")
+    assert.equal(readActivePort(root), 9333)
+    // A single line is not this file; the browser's own WebSocket path must be there too.
+    write("9333\n")
+    assert.equal(readActivePort(root), 0)
+    write("9333\n/devtools/page/x\n")
+    assert.equal(readActivePort(root), 0)
+    // Port 0 means "pick one", which is what the engine passes; it is not an answer.
+    write("0\n/devtools/browser/x\n")
+    assert.equal(readActivePort(root), 0)
+    write("http\n/devtools/browser/x\n")
+    assert.equal(readActivePort(root), 0)
+    write("70000\n/devtools/browser/x\n")
+    assert.equal(readActivePort(root), 0)
+    // A file far larger than the two short lines is not something to parse at all.
+    write("9333\n/devtools/browser/x\n" + "0".repeat(5000))
+    assert.equal(readActivePort(root), 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("an answer on the port counts only if it is this browser's own debugger", () => {
+  const ws = "ws://127.0.0.1:9333/devtools/browser/2f8a1c0e"
+  assert.equal(debuggerUrl(ws, 9333), ws)
+  assert.equal(debuggerUrl("ws://localhost:9333/devtools/browser/x", 9333), "ws://localhost:9333/devtools/browser/x")
+  assert.equal(debuggerUrl("ws://[::1]:9333/devtools/browser/x", 9333), "ws://[::1]:9333/devtools/browser/x")
+  // Same shape, different port: another listener that took the port before the browser did.
+  assert.equal(debuggerUrl("ws://127.0.0.1:9334/devtools/browser/x", 9333), null)
+  // Not loopback: the browser is started with --remote-debugging-address=127.0.0.1.
+  assert.equal(debuggerUrl("ws://10.0.0.5:9333/devtools/browser/x", 9333), null)
+  // A page target, a plain-http answer, and junk are not a browser endpoint.
+  assert.equal(debuggerUrl("ws://127.0.0.1:9333/devtools/page/x", 9333), null)
+  assert.equal(debuggerUrl("http://127.0.0.1:9333/devtools/browser/x", 9333), null)
+  assert.equal(debuggerUrl(undefined, 9333), null)
+  assert.equal(debuggerUrl("not a url", 9333), null)
+})
+
+test("the engine asks the browser to pick its own debugging port", () => {
+  const args = browserArgs({ port: 0, profileDir: "profile", headless: true })
+  assert.ok(args.includes("--remote-debugging-port=0"))
+  assert.ok(args.includes("--remote-debugging-address=127.0.0.1"))
+})
 
 test("sign-in choices list installed browsers once and keep MUSE_WEB_CHROME first", () => {
   const env = {
