@@ -1,5 +1,16 @@
 # 更新记录
 
+## 0.12.5 · 2026-11-28
+
+- 修复：Donut Browser 随附的 Wayfern 内核首次启动会要求执行 `--accept-terms-and-conditions`，
+  原来因此直接退出并让 muse.ai 登录停在「打不开浏览器」。引擎现在从完整 stderr 识别这条提示，
+  用同一个内核可执行文件自动接受一次条款，再重试正常启动；`MUSE_WEB_ACCEPT_TERMS=0`、`off`、
+  `no`、`false` 可关闭自动接受，失败时会给出可复制的命令。
+- 变更：`engine/browser.ts` 将浏览器启动拆成一次尝试和一次受控重试，保留完整启动 stderr 供
+  条款识别；接受命令不经过 shell，也不携带 profile、代理、URL 或账号数据。
+- 测试：新增 `test/wayfern-terms.test.ts`，覆盖完整条款提示识别、关闭开关、可行动错误和
+  POSIX 假内核的「接受一次后重试」流程。
+
 ## 0.12.4 · 2026-11-28
 
 - 修复：`test` 工作流会偶发在单个平台上失败，同一个提交在另外两个平台是绿的。两次失败都是 `a browser left in the legacy profile cannot block a new engine`：`v0.12.3` 的 windows-latest 报 `error: 'browser did not open its debugging port: timeout'`（33.3 s），`main` 的 ubuntu-latest 报 `error: 'browser did not open its debugging port: The operation was aborted'`。两次都在这个测试的第一次 `launchBrowser()` 上，而那也是整个作业里第一次真正启动浏览器（`--test-concurrency=1`，这个文件排在 `engine.test.ts` 之前），本地同一条测试 1.7 s。`launchBrowser()` 的 `waitMs` 原本是 30 s：Windows 上 30 s 里始终没有读到可用的 `DevToolsActivePort`（进程还活着，否则会报退出码与 stderr），Ubuntu 上文件有了但每次 1.5 s 的 `/json/version` 探测都被中止。也就是说 30 s 的预算被冷启动吃干了，而两个平台失败的样子还被同一句含糊的话盖住。现在默认预算改为 `START_BUDGET_MS`（60 s，`engine/browser.ts`），`MUSE_WEB_START_MS` 给更慢的机器继续调长；每次探测只用「预算里剩下的时间」，所以 `waitMs` 终于是它自称的那个上限（原先 30 s 预算实际会拖到 33 s）。

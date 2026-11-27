@@ -190,6 +190,13 @@
     测试见 `test/browser-recovery.test.ts`、`test/login-target.test.ts`、
     `test/devtools-bounded.test.ts`、`test/browser-start.test.ts`。设计见
     [`docs/adr/0015-browser-chosen-debug-port.md`](docs/adr/0015-browser-chosen-debug-port.md)。
+24. **Wayfern 的首次启动条款只接受一次。** Donut Browser 随附的 Wayfern 内核在首次运行时会
+    在 stderr 要求用 `--accept-terms-and-conditions` 接受条款，然后以退出码 1 结束；引擎从
+    完整 stderr 识别这个提示，默认只用同一个可执行文件、同一个标志运行一次接受命令，成功后
+    重新启动浏览器。接受命令用 `spawnSync()`，不继承 shell，也不把账号资料、代理或页面 URL
+    传给它；`MUSE_WEB_ACCEPT_TERMS=0`、`off`、`no`、`false` 可以关闭自动接受。接受失败时的
+    错误包含可复制的可执行文件路径和命令。测试见 `test/wayfern-terms.test.ts`，设计见
+    [`docs/adr/0017-browser-terms-once.md`](docs/adr/0017-browser-terms-once.md)。
 
 ## 已知残留风险
 
