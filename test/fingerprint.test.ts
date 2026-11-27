@@ -157,6 +157,25 @@ test("MUSE_WEB_DONUT_BROWSER names a Donut folder or the kernel, and off disable
   rmSync(home, { recursive: true, force: true })
 })
 
+// Wayfern is Donut's own Chromium fork, so the kernel keeps a different name per OS. Linux ships a
+// plain binary and macOS an app bundle; both have to be found by the name Wayfern actually uses.
+test("the Wayfern kernel is found by its own name on macOS and Linux", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "mw-fp-wayfern-posix-"))
+  const linux = path.join(home, "linux")
+  const linuxDir = path.join(linux, "binaries", "wayfern", "156.0.8078.86")
+  mkdirSync(linuxDir, { recursive: true })
+  const linuxExe = path.join(linuxDir, "wayfern")
+  writeFileSync(linuxExe, "kernel")
+  const mac = path.join(home, "mac")
+  const macDir = path.join(mac, "binaries", "wayfern", "156.0.8078.86", "Wayfern.app", "Contents", "MacOS")
+  mkdirSync(macDir, { recursive: true })
+  const macExe = path.join(macDir, "Wayfern")
+  writeFileSync(macExe, "kernel")
+  assert.equal(findWayfernBrowser({ MUSE_WEB_DONUT_BROWSER: linux }, "linux"), linuxExe)
+  assert.equal(findWayfernBrowser({ MUSE_WEB_DONUT_BROWSER: mac }, "darwin"), macExe)
+  rmSync(home, { recursive: true, force: true })
+})
+
 test("a missing fingerprint browser is downloaded, verified and installed", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-dl-"))
   const archive = storedZip([["apostate/chrome.exe", "browser"], ["apostate/manifest.json", "{}"]])

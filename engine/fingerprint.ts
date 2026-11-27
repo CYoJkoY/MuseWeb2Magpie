@@ -199,13 +199,13 @@ export function findExecutable(root: string, platform: string = process.platform
   if (!root) return null
   const wanted = (file: string): boolean => {
     const base = baseName(file)
-    if (platform === "win32") return base === "chrome.exe" || /^apostate.*\.exe$/.test(base)
+    if (platform === "win32") return base === "chrome.exe" || base === "wayfern.exe" || /^apostate.*\.exe$/.test(base)
     if (platform === "darwin") {
       const parts = file.split(/[\\/]/)
       const i = parts.lastIndexOf("MacOS")
-      return i > 0 && /^(chromium|apostate)$/i.test(parts[i + 1] || "") && !/helper/i.test(file)
+      return i > 0 && /^(chromium|apostate|wayfern)$/i.test(parts[i + 1] || "") && !/helper/i.test(file)
     }
-    return base === "chrome" || base === "apostate"
+    return base === "chrome" || base === "chromium" || base === "apostate" || base === "wayfern"
   }
   let stat: any
   try { stat = statSync(root) } catch { return null }

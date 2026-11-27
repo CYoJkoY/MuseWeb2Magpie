@@ -6,7 +6,8 @@
 - 新增：登录前选择浏览器的列表末尾多了「手动填写浏览器路径…」。选了它并填上浏览器可执行文件的完整路径，就能用便携版、绿色版或装在别的盘、自动扫描扫不到的浏览器登录；从列表里选中的浏览器优先于残留的手填路径，只选不填或路径不存在都会在开始登录前直接报错。
 - 新增：优先使用本机 Donut Browser 自带的 Wayfern 内核。引擎自动查找 `%LOCALAPPDATA%\DonutBrowser`、`DONUTBROWSER_DATA_DIR` / `DONUTBROWSER_DATA_ROOT` 指到的目录，以及 Scoop 安装的 `apps\donutbrowser\current\data`，取 `binaries\wayfern` 下版本最高的内核。Wayfern 在命令行上就是普通 Chromium，按 Chromium 启动，不加 `--fingerprint` 参数，也不读写 Donut 自己的账号数据。`MUSE_WEB_DONUT_BROWSER` 可以指向 Donut 的 data 目录或内核文件，设为 `0` 时跳过 Donut、只用 Apostate。
 - 新增：`engine/fingerprint.ts` 的浏览器准备顺序改为：`MUSE_WEB_FINGERPRINT_BROWSER` → Donut 的 Wayfern 内核 → 本机已有的 Apostate → 下载固定版本的 Apostate。登录时的浏览器列表里，Donut Browser（Wayfern 内核）排在第一位，其次是 Apostate 指纹浏览器。
-- 测试：覆盖 Wayfern 内核优先复用且不触网、多版本取最高、`MUSE_WEB_DONUT_BROWSER` 指向目录 / 内核 / `off`，以及登录列表把 Donut 排在第一项。
+- 修复：Wayfern 内核按各系统的真实命名识别——Windows 是 `chrome.exe`，macOS 是 `Chromium.app/Contents/MacOS/Chromium`（或同结构的 `Wayfern.app`），Linux 是 `chrome` / `chromium` / `wayfern`——避免在 macOS、Linux 上找不到 Donut 的内核。
+- 测试：覆盖 Wayfern 内核优先复用且不触网、多版本取最高、`MUSE_WEB_DONUT_BROWSER` 指向目录 / 内核 / `off`、各系统内核命名，以及登录列表把 Donut 排在第一项（Windows / macOS / Linux 都按本机内核形状构造）。
 
 ## 0.11.0 · 2026-11-27
 

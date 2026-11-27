@@ -316,7 +316,14 @@ test("Donut Browser's Wayfern kernel is the first browser offered at sign-in", a
   const { port } = fake.server.address() as AddressInfo
   const home = mkdtempSync(path.join(os.tmpdir(), "mw-contract-donut-"))
   const scoop = path.join(home, "scoop")
-  const kernel = path.join(scoop, "apps", "donutbrowser", "current", "data", "binaries", "wayfern", "156.0.8078.86", "chrome.exe")
+  const version = path.join(scoop, "apps", "donutbrowser", "current", "data", "binaries", "wayfern", "156.0.8078.86")
+  // Donut ships a different kernel shape per OS: chrome.exe on Windows, a Chromium app bundle on
+  // macOS, and a plain chrome binary on Linux. The scan has to find the real one for this host.
+  const kernel = process.platform === "win32"
+    ? path.join(version, "chrome.exe")
+    : process.platform === "darwin"
+      ? path.join(version, "Chromium.app", "Contents", "MacOS", "Chromium")
+      : path.join(version, "chrome")
   mkdirSync(path.dirname(kernel), { recursive: true })
   writeFileSync(kernel, "kernel")
   const names = ["SCOOP", "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "MUSE_WEB_ENGINE", "MUSE_WEB_ENGINE_KEY", "MUSE_WEB_ENGINE_PORT", "MUSE_WEB_ENGINE_BIN", "MUSE_WEB_DONUT_BROWSER"]
