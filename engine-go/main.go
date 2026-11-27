@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,7 +83,7 @@ func run() error {
 	}
 	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", cfg.port))
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) && sameEngine(cfg.port) {
+		if errors.Is(err, syscall.EADDRINUSE) && sameEngine(cfg.port, cfg.key) {
 			log.Log("another muse-web engine already serves port %d; leaving it running", cfg.port)
 			return nil
 		}
@@ -273,16 +274,33 @@ func run() error {
 	return err
 }
 
-func sameEngine(port int) bool {
+// sameEngine reports whether the port is held by another engine that shares this data directory —
+// that is, one that can prove it holds the same engine.key. A squatter that merely answers in the
+// engine's name is not "the engine", so its port stays unavailable instead of being adopted.
+func sameEngine(port int, key string) bool {
 	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	defer client.CloseIdleConnections()
-	res, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/v1/health", port))
+	nonce, err := randomHex(16)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/v1/health", port), nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("x-muse-challenge", nonce)
+	res, err := client.Do(req)
 	if err != nil {
 		return false
 	}
 	defer res.Body.Close()
 	var body struct {
 		Engine string `json:"engine"`
+		Proof  string `json:"proof"`
 	}
-	return res.StatusCode == 200 && json.NewDecoder(res.Body).Decode(&body) == nil && body.Engine == engineName
+	if res.StatusCode != 200 || json.NewDecoder(res.Body).Decode(&body) != nil || body.Engine != engineName {
+		return false
+	}
+	want := healthProof(key, nonce)
+	return subtle.ConstantTimeCompare([]byte(strings.ToLower(strings.TrimSpace(body.Proof))), []byte(want)) == 1
 }

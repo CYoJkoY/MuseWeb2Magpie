@@ -6,6 +6,7 @@ import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { healthProof } from "../engine/health.ts"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, "..")
@@ -120,6 +121,15 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
     assert.equal(health.body.engine, "muse-web")
     assert.equal(health.body.version, "0.11.0")
     assert.equal(health.body.accounts, 3)
+    // Without a challenge the port reveals no proof.
+    assert.equal(health.body.proof, undefined)
+    // A challenge makes the port prove it holds engine.key; the same HMAC the TypeScript side computes.
+    const nonce = "test-nonce-0123456789"
+    const proved = await jsonOf(await fetch(`${base}/v1/health`, { headers: { "x-muse-challenge": nonce } }))
+    assert.equal(proved.body.proof, healthProof(key, nonce))
+    // A malformed nonce earns no proof rather than a MAC over arbitrary input.
+    const bad = await jsonOf(await fetch(`${base}/v1/health`, { headers: { "x-muse-challenge": "bad" } }))
+    assert.equal(bad.body.proof, undefined)
 
     const denied = await jsonOf(await api("/v1/models", {}, "", "wrong"))
     assert.equal(denied.status, 401)

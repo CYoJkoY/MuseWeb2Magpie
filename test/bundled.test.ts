@@ -3,18 +3,22 @@
 import { after, before, test } from "node:test"
 // @ts-nocheck
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import http from "node:http"
 import { VERSION } from "../engine/version.ts"
 import os from "node:os"
 import path from "node:path"
 import { findBrowser, freePort } from "../engine/browser.ts"
+import { healthProof } from "../engine/health.ts"
 import { anyFetch } from "../engine/local-fetch.ts"
 import { MuseWebPlugin } from "../index.ts"
 import { startFakeMuse } from "./fake-muse.ts"
 
 const skip = findBrowser() ? false : "no Chrome/Edge/Chromium installed"
+// A fixed key written before the engine starts, so the fake legacy engine below can prove it knows
+// the key the plugin will look for; the real engine reuses this same file afterwards.
+const OLD_KEY = "old-engine-key-for-the-bundled-test"
 let fake, home, port, hooks
 
 async function stopEngine() {
@@ -32,6 +36,7 @@ before(async () => {
   fake = await startFakeMuse()
   home = mkdtempSync(path.join(os.tmpdir(), "mw-bundled-"))
   port = await freePort()
+  writeFileSync(path.join(home, "engine.key"), OLD_KEY + "\n", { mode: 0o600 })
   delete process.env.MUSE_WEB_ENGINE
   delete process.env.MUSE_WEB_ENGINE_KEY
   Object.assign(process.env, {
@@ -80,7 +85,12 @@ test("an engine left by an older plugin version is stopped and replaced", { skip
       return
     }
     res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ ok: true, engine: "muse-web", version: "0.0.1", accounts: 0 }))
+    const body: Record<string, unknown> = { ok: true, engine: "muse-web", version: "0.0.1", accounts: 0 }
+    // Prove we hold the key, exactly as a real old engine would, so the plugin trusts us enough to
+    // retire and replace us rather than treating the port as a squatter.
+    const nonce = req.headers["x-muse-challenge"]
+    if (typeof nonce === "string" && nonce) body.proof = healthProof(OLD_KEY, nonce)
+    res.end(JSON.stringify(body))
   })
   await new Promise<void>((r) => old.listen(port, "127.0.0.1", r))
   hooks = await MuseWebPlugin({})

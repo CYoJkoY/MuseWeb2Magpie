@@ -5,7 +5,9 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -151,6 +153,30 @@ var (
 	redactQuery  = regexp.MustCompile(`(?i)([?&](?:key|token|access_token|refresh_token|api_key)=)[^&\s]+`)
 	redactCookie = regexp.MustCompile(`(?i)\b(hatch_[a-z_]+)=([^;\s]+)`)
 )
+
+// healthProof answers a caller's nonce with an HMAC that only a holder of engine.key can make, so
+// the port can prove "I am your engine" without the key ever being sent to it. The prefix keeps
+// the answer from doubling as a signature over anything else. Kept identical to engine/health.ts.
+func healthProof(key, nonce string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write([]byte("muse-web-health:" + nonce))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// validNonce keeps the unauthenticated proof from being a MAC oracle over arbitrary input.
+func validNonce(nonce string) bool {
+	if len(nonce) < 8 || len(nonce) > 64 {
+		return false
+	}
+	for _, r := range nonce {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // redact strips the shapes that carry credentials, for log lines and error bodies alike.
 func redact(text string) string {

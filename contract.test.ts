@@ -388,10 +388,12 @@ test("an unreachable engine is an error, not an expired sign-in", async () => {
   const fx = await boot()
   await fx.close()
   const usage = await fx.hooks.auth.usage(async () => ({ type: "api", key: "acct-handle-1" }))
-  assert.deepEqual(usage, { error: "engine unreachable" })
+  // A down engine reads as a down engine, not as a refused sign-in.
+  assert.match(usage.error, /引擎/)
+  assert.equal(usage.signIn, undefined)
   await assert.rejects(
     () => fx.hooks.auth.refresh({ type: "api", key: "acct-handle-1" }),
-    (err: any) => err.message === "engine unreachable" && err.signIn === undefined,
+    (err: any) => /引擎/.test(err.message) && err.signIn === undefined,
   )
 })
 

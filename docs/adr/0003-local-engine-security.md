@@ -53,14 +53,13 @@ what was missing was a written model plus two concrete gaps found in an audit:
 - **Centralize headers in a middleware on `http.Server`.** Equivalent, but `response.header()` is
   the single funnel every route already flows through, and it keeps the SSE and HTML exceptions
   next to the code that needs them.
-- **Add a keyed challenge to `/v1/health` now.** Deferred: it needs a coordinated Go + TypeScript
-  change plus a version-negotiation path for an older engine, and the exposure is limited to the
-  same user. `SECURITY.md` records it as a planned improvement.
+- **Add a keyed challenge to `/v1/health`.** Deferred to ADR 0004, which implements it: a port must
+  prove it holds `engine.key` with an HMAC answer before the plugin sends it the key.
 
 ## Consequences
 
 A page inside the engine profile can no longer drive DevTools, and every answer is harder to
 misinterpret or cache. The engine's own CDP client is unaffected because it never sends an
 `Origin`, and the change is covered by both unit and real-browser tests. `SECURITY.md` becomes the
-place to update when a boundary changes, and the deferred `/v1/health` challenge is tracked there
-rather than silently dropped.
+place to update when a boundary changes; the `/v1/health` challenge is implemented in
+[ADR 0004](0004-health-challenge.md).

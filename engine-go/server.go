@@ -344,7 +344,14 @@ func (e *engine) route(res *response, r *http.Request, m *meta) error {
 	path := r.URL.Path
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/health":
-		res.json(200, map[string]any{"ok": true, "engine": engineName, "version": version, "accounts": e.store.Count()})
+		body := map[string]any{"ok": true, "engine": engineName, "version": version, "accounts": e.store.Count()}
+		// A caller may ask the port to prove it holds engine.key: it sends a nonce and gets back an
+		// HMAC it can check locally. Without the challenge nothing extra is revealed, and the key
+		// itself is never part of the answer.
+		if nonce := strings.TrimSpace(r.Header.Get("x-muse-challenge")); validNonce(nonce) {
+			body["proof"] = healthProof(e.cfg.key, nonce)
+		}
+		res.json(200, body)
 		return nil
 	case r.Method == http.MethodGet && path == "/v1/models":
 		if err := e.authorize(r); err != nil {

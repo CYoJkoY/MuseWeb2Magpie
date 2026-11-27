@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { dataDir, enginePort } from "./engine/paths.ts"
 import { browserOptions } from "./engine/browser.ts"
 import { findFingerprintBrowser, findWayfernBrowser, isWayfernBrowser } from "./engine/fingerprint.ts"
+import { CHALLENGE_HEADER, healthChallenge, provesHealth } from "./engine/health.ts"
 import { anyFetch } from "./engine/local-fetch.ts"
 import { VERSION } from "./engine/version.ts"
 
@@ -91,15 +92,54 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
     return existsSync(file) ? readFileSync(file, "utf8").trim() : ""
   }
 
-  // The running engine's version, or "" when nothing of ours answers.
-  async function running() {
+  // When the port last proved it holds this data directory's engine.key. `trouble` explains a port
+  // that answers in the engine's name but cannot prove itself, so the message can be acted on.
+  let verifiedAt = 0
+  let trouble = ""
+
+  // Asks the port to prove it is our engine: send a nonce, check the HMAC only a holder of
+  // engine.key can make. A squatter that binds the port first answers in the engine's name but
+  // cannot produce the proof, so it is never treated as ours and never handed the key.
+  async function inspect(): Promise<{ version: string; ours: boolean; answered: boolean }> {
+    const nonce = healthChallenge()
     try {
-      const res = await anyFetch(`${engineOrigin()}/v1/health`, { signal: AbortSignal.timeout(1500) })
+      const res = await anyFetch(`${engineOrigin()}/v1/health`, {
+        headers: { [CHALLENGE_HEADER]: nonce },
+        signal: AbortSignal.timeout(1500),
+      })
       const body = res.ok ? await res.json() as any : null
-      return body?.engine === "muse-web" ? String(body.version || "?") : ""
+      if (body?.engine !== "muse-web") return { version: "", ours: false, answered: true }
+      const version = String(body.version || "?")
+      const key = engineKey()
+      if (key && provesHealth(body, key, nonce)) {
+        verifiedAt = Date.now()
+        trouble = ""
+        return { version, ours: true, answered: true }
+      }
+      return { version, ours: false, answered: true }
     } catch {
-      return ""
+      return { version: "", ours: false, answered: false }
     }
+  }
+
+  // The running engine's version, or "" unless the port proves it is ours.
+  async function running() {
+    const seen = await inspect()
+    return seen.ours ? seen.version : ""
+  }
+
+  // True only when the port at engineOrigin() is one we may send engine.key and account handles to.
+  async function ours() {
+    if (external()) return true
+    if (Date.now() - verifiedAt < 30_000) return true
+    return (await inspect()).ours
+  }
+
+  // Why the engine cannot be reached, in terms a person can act on.
+  function downMessage() {
+    return trouble
+      ? `muse-web 引擎连不上：${trouble}`
+      : "muse-web 引擎没有启动；日志在数据目录的 engine.log"
   }
 
   async function retire() {
@@ -119,10 +159,18 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
     if (external()) return Promise.resolve(true)
     if (!force && Date.now() - checkedAt < 30_000) return Promise.resolve(true)
     starting ??= (async () => {
-      const version = await running()
-      if (current(version)) return true
-      // An engine left from an older plugin version is replaced; same data dir, same accounts.
-      if (version) await retire()
+      const seen = await inspect()
+      if (seen.ours && current(seen.version)) return true
+      if (seen.ours) {
+        // An engine left from an older plugin version is replaced; same data dir, same accounts.
+        await retire()
+      } else if (seen.answered) {
+        // Something holds the port and answers in the engine's name but cannot prove it holds our
+        // key — typically an engine from before this check that is still running after an upgrade.
+        // Do not spawn (the port is taken) and do not send it the key; the person restarts Magpie.
+        trouble = `端口 ${enginePort()} 已被别的进程占用，而且它无法证明自己持有 engine.key（常见于升级后仍在运行的旧版引擎）。请重启 Magpie，或结束占用该端口的进程。`
+        return false
+      }
       const binary = String(process.env.MUSE_WEB_ENGINE_BIN || bundledEngine()).trim()
       if (!existsSync(binary)) throw new Error(`muse-web engine binary not found: ${binary}`)
       const child = spawn(binary, [], {
@@ -141,7 +189,8 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
       const end = Date.now() + ENGINE_START_MS
       while (Date.now() < end) {
         await sleep(300)
-        if (current(await running())) return true
+        const started = await inspect()
+        if (started.ours && current(started.version)) return true
       }
       return false
     })().then((ok) => {
@@ -154,6 +203,8 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
   // Returns null when the engine is down or silent, so callers never mistake that for a refused sign-in.
   async function control(pathname: string, method: string, handle: string, payload?: any): Promise<Response | null> {
     if (!(await ensureEngine())) return null
+    // Never hand engine.key (or an account handle) to a port that has not proven it is ours.
+    if (!(await ours())) return null
     const headers = engineHeaders(engineKey(), handle)
     if (payload !== undefined) headers["content-type"] = "application/json"
     try {
@@ -184,7 +235,7 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
     // when the scan missed it and there is nothing else to go on.
     const browser = picked === MANUAL_BROWSER ? typed : picked || typed
     const res = await control("/v1/login", "POST", "", browser ? { browser } : undefined)
-    if (!res?.ok) throw new Error(res ? `muse-web 引擎没能开始登录（HTTP ${res.status}）` : "muse-web 引擎没有启动；日志在数据目录的 engine.log")
+    if (!res?.ok) throw new Error(res ? `muse-web 引擎没能开始登录（HTTP ${res.status}）` : downMessage())
     const { id, url } = await res.json() as any
     return {
       url,
@@ -299,7 +350,7 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
         const handle = handleOf(auth)
         if (!handle) throw Object.assign(new Error("muse-web account has no engine handle"), { signIn: "expired" })
         const res = await control("/v1/session/refresh", "POST", handle)
-        if (!res) throw new Error("engine unreachable")
+        if (!res) throw new Error(downMessage())
         if (res.status === 401) throw Object.assign(new Error("session refused"), { signIn: "expired" })
         if (!res.ok) throw new Error("session refresh unavailable")
         const body = await res.json() as any
@@ -316,7 +367,7 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
         const handle = handleOf(await getAuth())
         if (!handle) return { error: "muse-web account has no engine handle", signIn: "expired" }
         const res = await control("/v1/usage", "GET", handle)
-        if (!res) return { error: "engine unreachable" }
+        if (!res) return { error: downMessage() }
         if (res.status === 401) return { error: "session refused", signIn: "expired" }
         let body: any = {}
         try {
@@ -346,7 +397,10 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
             if (!handle) throw Object.assign(new Error("muse-web account has no engine handle"), { signIn: "expired" })
             const incoming = new Headers(init?.headers)
             const send = async () => {
-              await ensureEngine()
+              // The engine must be up and must prove it is ours before engine.key or an account
+              // handle leaves this process; a port that cannot prove itself never sees either.
+              if (!(await ensureEngine())) throw new Error(downMessage())
+              if (!(await ours())) throw new Error(downMessage())
               const headers = new Headers(engineHeaders(engineKey(), handle))
               for (const name of ["content-type", "accept", "x-muse-session"]) {
                 const value = incoming.get(name)

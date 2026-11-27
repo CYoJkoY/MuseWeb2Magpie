@@ -24,7 +24,7 @@
 以下每条都是设计约束，改动时请连同测试一起改，不要单向放松。
 
 1. **只监听回环。** `engine-go/main.go` 用 `net.Listen("tcp4", "127.0.0.1:<port>")`，端口来自
-   `MUSE_WEB_ENGINE_PORT`，默认随机空闲端口；不存在对外监听的路径。
+   `MUSE_WEB_ENGINE_PORT`，默认固定为 `18611`；不存在对外监听的路径。
 2. **每个 `/v1/*` 都要密钥。** `engine-go/server.go` 的 `authorize()` 解析 `Authorization: Bearer`
    并与 `engine.key` 做 `subtle.ConstantTimeCompare`，失败回 401 `engine_key_invalid`。
 3. **账号数据只有当前用户能读。** 数据目录 `0700`，`engine.key`、`accounts.json`、`engine.log`
@@ -48,6 +48,13 @@
    未校验的文件；`engine/fingerprint.ts` 的内置 zip 读取器拒绝 `..` 和绝对路径条目。
 10. **不复用日常浏览器资料。** 登录窗口用临时资料目录，登录完成后删除；引擎浏览器各自独立，
     也不读写 Donut Browser 自己的账号数据。
+11. **端口先证明身份，才拿得到密钥。** `/v1/health` 仍然免鉴权（插件必须先问“在不在、哪个版本”），
+    但调用方可以带 `x-muse-challenge: <nonce>`，引擎回 `proof = hex(HMAC-SHA256(engine.key,
+    "muse-web-health:" + nonce))`。插件只有在 `proof` 与本地算出的值常量时间相等时，才会把
+    `engine.key` 或账号句柄发给该端口；证明不了的端口一律不发。于是端口被抢先占用、或升级后仍在
+    运行的旧引擎，都拿不到 `engine.key`。Go 的 `healthProof` 与 `engine/health.ts` 逐字节一致，
+    `engine-go/health_test.go` 与 `test/engine-identity.test.ts` 守住这条；设计见
+    [`docs/adr/0004-health-challenge.md`](docs/adr/0004-health-challenge.md)。
 
 ## 已知残留风险
 
@@ -55,9 +62,10 @@
 
 - **同用户进程**可以读 `engine.key` 和 `accounts.json`，也可以连上引擎端口。跨用户保护依赖操作系统
   权限，插件不额外加密本地账号文件。
-- **`/v1/health` 不鉴权**，插件靠它判断端口上是不是同一个引擎。端口被抢先占用时，插件可能把
-  `engine.key` 发给一个同名冒充者——影响面限于同一个用户。改进方向是为 health 加带密钥的
-  challenge（Go 与插件两侧 + 测试），排期在后续版本。
+- **无法证明身份的旧引擎要人工处理。** 端口被一个不能证明持有 `engine.key` 的进程占用时（典型是
+  升级后仍在运行的旧版引擎），插件既不 spawn、也不发密钥，直接报“端口被占用”，提示重启 Magpie
+  或结束占用端口的进程。重启 Magpie 会由 parent-PID watchdog 结束旧引擎；旧引擎也会在 60 分钟
+  空闲后自行退出。
 - **上游错误文本**可能包含普通字样（不是 cookie），脱敏只覆盖已知的凭据形状。
 - **muse.ai 改版**导致的页面选择器失效属于兼容性问题，不是安全漏洞；这类情况按普通 bug 报告。
 
@@ -76,6 +84,9 @@ A short English summary of the same model. The engine listens on `127.0.0.1` onl
 request bodies at 8 MB, sends `x-content-type-options: nosniff` plus `no-store` on answers, serves
 the sign-in progress page with escaping and a strict CSP, verifies downloaded browsers by sha256,
 and launches its browser without `--remote-allow-origins=*`, so a page inside the engine profile
-cannot drive CDP. Known limits: same-user processes are trusted by design, `/v1/health` is
-unauthenticated (a keyed challenge is planned), and upstream error text may still contain ordinary
-strings. Please report issues without cookies, `engine.key`, or unscrubbed logs.
+cannot drive CDP. `/v1/health` stays unauthenticated so the plugin can ask "is an engine up, and
+which version?", but a caller may send a nonce and the engine answers with an HMAC proof; the plugin
+only ever sends `engine.key` to a port that proves it holds the key, so a squatter or a
+pre-upgrade engine is never handed the key. Known limits: same-user processes are trusted by
+design, and upstream error text may still contain ordinary strings. Please report issues without
+cookies, `engine.key`, or unscrubbed logs.

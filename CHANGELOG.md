@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 安全：插件现在先让端口证明自己持有 `engine.key`，再把密钥发过去。`/v1/health` 仍然免鉴权，但带 `x-muse-challenge: <nonce>` 时引擎会回 `proof = hex(HMAC-SHA256(engine.key, "muse-web-health:" + nonce))`，插件只在常量时间比较通过后才发密钥或账号句柄；证明不了的端口一律不发。端口被抢注、或升级后仍在运行的旧版引擎，从此拿不到 `engine.key`，插件改为直接报「端口被占用」并提示重启 Magpie。Go 与 TypeScript 两侧的 HMAC 实现由同一组固定向量钉住（`engine-go/health_test.go`），新增 Chrome-free 的 `test/engine-identity.test.ts` 覆盖「冒充者拿不到密钥」与「能证明的旧引擎带密钥退役」，真实浏览器测试里的旧引擎假件也改为按真实方式自证。设计见 `docs/adr/0004-health-challenge.md`，`SECURITY.md` 的不变量相应从十条变十一条。
+- 文档：`README` 补充「端口先证明身份才拿得到密钥」的安全边界与「升级后提示端口被占用」的排查条目；`docs/adr/0003` 里延期实现的 health challenge 改为指向 ADR 0004。
 - 安全：引擎浏览器不再带 `--remote-allow-origins=*`。DevTools 仍然只绑 `127.0.0.1` 的随机端口，但浏览器会拒绝带 `Origin` 头的握手，所以账号资料目录里加载的网页再也连不上 CDP——控制不了浏览器，也读不到 muse.ai 会话。引擎自己的客户端不发 `Origin`，照常连接；单测守住这条参数，真实浏览器测试跑通整条链路，Wayfern 内核上的冒烟验证里裸握手能连、带 `Origin: http://evil.test` 的握手回 403。
 - 安全：所有响应统一带 `x-content-type-options: nosniff`，没有自己指定缓存策略的响应默认 `cache-control: no-store`（SSE 流保留 `no-cache`）；登录进度页 `/login/<id>` 另加 `content-security-policy: default-src 'none'; style-src 'unsafe-inline'; …`、`x-frame-options: DENY` 和 `referrer-policy: no-referrer`。
 - 新增：`SECURITY.md` 写清信任边界、十条必须保持的不变量（只监听回环、Bearer 常量时间比较、目录 0700 / 文件 0600 与原子写、日志脱敏、DevTools 不对网页开放、8 MB 请求体上限、`nosniff` / `no-store`、登录页最小权限、下载校验与防解压穿越、不复用日常浏览器资料）以及已知残留风险；`docs/adr/0003` 记录这次取舍，README 的安全边界一节链接过去。
