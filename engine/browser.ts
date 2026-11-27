@@ -252,12 +252,41 @@ export function sweepProfiles(root: string): Promise<void> {
 
 const STDERR_LIMIT = 4096
 
-// Chrome's own message (a missing library, a locked profile, a rejected flag) is the only useful
-// clue when it exits before its debugging port opens; a bare "exited during start" hides all of it.
+// The last few lines the browser printed, folded onto one line. Chrome's own message (a missing
+// library, a locked profile, a rejected flag) is the only useful clue when a start goes wrong, and
+// both ways a start can fail need it.
+function stderrTail(stderr: string): string {
+  return String(stderr || "").trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ")
+}
+
+// Chrome's own message is the only useful clue when it exits before its debugging port opens; a
+// bare "exited during start" hides all of it.
 function startFailure({ code, signal, stderr }: { code: number | null; signal: string | null; stderr: string }): Error {
   const status = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
-  const detail = String(stderr || "").trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" | ")
+  const detail = stderrTail(stderr)
   return new Error(`browser exited during start (${status})${detail ? `: ${detail}` : ""}`)
+}
+
+// A start that never opens its port used to say only "timeout" — on a loaded runner that named
+// neither the file the browser writes nor the browser's own complaint, so a run could fail twice
+// with no way to tell a slow cold start from a file that never arrived or a listener that never
+// answered. The message carries the three facts that separate those cases: how long the engine
+// waited, what DevToolsActivePort holds (or that it is still missing), the last probe's answer,
+// and what the browser itself said.
+export function startTimeout({ profileDir, stderr, last, waitedMs }: {
+  profileDir: string
+  stderr: string
+  last: Error | null
+  waitedMs: number
+}): Error {
+  let portFile = "still missing"
+  try {
+    // The file is two short lines; a few hundred bytes are enough to see a truncated or foreign one.
+    portFile = `holds ${JSON.stringify(readFileSync(path.join(profileDir, "DevToolsActivePort"), "utf8").slice(0, 200))}`
+  } catch {}
+  const said = stderrTail(stderr)
+  return new Error(`browser did not open its debugging port within ${Math.round(waitedMs / 1000)} s `
+    + `(DevToolsActivePort ${portFile}; last probe: ${last?.message ?? "none"}; browser said: ${said || "nothing"})`)
 }
 
 export interface Launched {
@@ -266,6 +295,19 @@ export interface Launched {
   browser: CDP
   profileDir: string
   close: () => Promise<void>
+}
+
+// A cold Chromium can spend a long time creating its profile before it writes its port file: on a
+// loaded two-core CI runner the first launch of a job has spent more than 30 s there, and a budget
+// that expires in the middle of a start turns a slow machine into a failure the person cannot act
+// on. 60 s is the default ceiling; MUSE_WEB_START_MS raises it for a machine slower still.
+export const START_BUDGET_MS = 60_000
+
+// A value that is not a usable number of milliseconds leaves the default alone: "0", "", "soon" or
+// anything under a second would otherwise mean "never wait at all".
+export function startBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const ms = Number(env.MUSE_WEB_START_MS)
+  return Number.isFinite(ms) && ms >= 1000 ? Math.floor(ms) : START_BUDGET_MS
 }
 
 export interface LaunchOptions {
@@ -280,7 +322,7 @@ export interface LaunchOptions {
   extraArgs?: string[]
 }
 
-export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", waitMs = 30_000, extraArgs = [] }: LaunchOptions): Promise<Launched> {
+export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", waitMs = startBudget(), extraArgs = [] }: LaunchOptions): Promise<Launched> {
   if (!executable) {
     throw new Error("没找到可用的浏览器：本机没有 Donut Browser 和内嵌的 Wayfern 内核，开源指纹浏览器 Apostate 也没能下载，"
       + "本机也没有 Chrome、Edge 或 Chromium；联网后重试，或用 MUSE_WEB_DONUT_BROWSER / MUSE_WEB_FINGERPRINT_BROWSER"
@@ -343,7 +385,10 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
     const active = readActivePort(profileDir)
     if (active) {
       try {
-        const v = await httpJSON(`http://127.0.0.1:${active}/json/version`, 1500)
+        // The probe gets what is left of the budget, so a listener that never answers cannot push
+        // the wait past the ceiling this function promises.
+        const left = waitMs - (Date.now() - started)
+        const v = await httpJSON(`http://127.0.0.1:${active}/json/version`, Math.max(500, Math.min(1500, left)))
         const ws = debuggerUrl(v?.webSocketDebuggerUrl, active)
         if (ws) {
           const browser = await CDP.connect(ws)
@@ -356,8 +401,9 @@ export async function launchBrowser({ executable, profileDir, temporary = false,
     }
     await new Promise<void>((r) => setTimeout(r, 250))
   }
+  const waited = Date.now() - started
   await close()
-  throw new Error(`browser did not open its debugging port: ${last?.message ?? "timeout"}`)
+  throw startTimeout({ profileDir, stderr, last, waitedMs: waited })
 }
 
 // Resolves once the process is gone: asked politely first, killed after 3 s.
