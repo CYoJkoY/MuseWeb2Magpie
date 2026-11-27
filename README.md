@@ -275,8 +275,9 @@ Magpie 在会话到期前 10 分钟自动续期；续不上时额度卡片显示
 - 免鉴权的登录进度页不做任何活：登录 ID 必须符合 `login_start` 发出去的形状（否则直接 404），没有驱动在跑时页面只回答「找不到这次登录」而不去拉起一个浏览器进程；同时处理的请求也有固定在飞上限（免鉴权页面 4 个、带密钥 64 个），超了就回 503 `engine_busy` 而不是排队把内存撑大（见 ADR 0008）。
 - 手填的浏览器路径必须是绝对路径、并且是一个真实的普通文件（见 ADR 0009）：相对路径会被引擎解析到自己所在目录、等于让一个名字决定跑哪个程序，所以插件在开始登录前、引擎在真正启动前都会拒绝它，并说明是哪里不对；粘贴带来的一对引号与首尾空白会被去掉。
 - `MUSE_WEB_SITE` 决定 muse.ai 会话 cookie 发到哪个源，所以它遵循和 `engine.key` 相同的凭据传输规则（见 ADR 0010）：明文 http 只能指向本机回环地址（`127.0.0.1`、`localhost` 或 `[::1]`），其他地方必须 https；不是完整网址或带了用户名密码的值在浏览器启动前就被拒绝，并说明原因。镜像站照旧可以指向回环，真实站点默认不需要配置。
+- 指纹浏览器的下载文件名只取远端名字的最后一段（见 ADR 0011）：绝对路径、盘符和 `..` 段不会成为落盘路径，压缩格式后缀保留；名字被改写后不再匹配固定版本的 sha256，这次下载必须自带 `.manifest.json` 的哈希，否则不安装、退回系统 Chromium。
 
-完整的威胁模型、必须保持的不变量和已知残留风险见 [`SECURITY.md`](SECURITY.md)；health challenge 的取舍见 [`docs/adr/0004-health-challenge.md`](docs/adr/0004-health-challenge.md)，凭据只走回环或 https 的取舍见 [`docs/adr/0006-credentials-over-the-wire.md`](docs/adr/0006-credentials-over-the-wire.md)，免鉴权面不做工与在飞上限的取舍见 [`docs/adr/0008-admission-control.md`](docs/adr/0008-admission-control.md)，手填浏览器路径的形状限制见 [`docs/adr/0009-typed-browser-path.md`](docs/adr/0009-typed-browser-path.md)，配置站点的传输规则见 [`docs/adr/0010-configured-site-transport.md`](docs/adr/0010-configured-site-transport.md)。
+完整的威胁模型、必须保持的不变量和已知残留风险见 [`SECURITY.md`](SECURITY.md)；health challenge 的取舍见 [`docs/adr/0004-health-challenge.md`](docs/adr/0004-health-challenge.md)，凭据只走回环或 https 的取舍见 [`docs/adr/0006-credentials-over-the-wire.md`](docs/adr/0006-credentials-over-the-wire.md)，免鉴权面不做工与在飞上限的取舍见 [`docs/adr/0008-admission-control.md`](docs/adr/0008-admission-control.md)，手填浏览器路径的形状限制见 [`docs/adr/0009-typed-browser-path.md`](docs/adr/0009-typed-browser-path.md)，配置站点的传输规则见 [`docs/adr/0010-configured-site-transport.md`](docs/adr/0010-configured-site-transport.md)，下载文件名的限制见 [`docs/adr/0011-release-file-name.md`](docs/adr/0011-release-file-name.md)。
 
 <a name="readme-usage"></a>
 

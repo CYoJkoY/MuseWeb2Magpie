@@ -14,6 +14,7 @@ import {
   findWayfernBrowser,
   fingerprintArgs,
   pickReleaseAsset,
+  releaseFileName,
   verifySha256,
 } from "../engine/fingerprint.ts"
 
@@ -77,6 +78,23 @@ test("downloads are accepted only with their pinned sha256", () => {
   assert.equal(verifySha256(data, sha), false)
   assert.equal(verifySha256(data, "not-a-hash"), false)
   assert.equal(verifySha256(data, ""), false)
+})
+
+test("a release file name is only ever a plain name inside the download folder", () => {
+  // What the pin and the real releases announce passes through unchanged.
+  assert.equal(releaseFileName(APOSTATE_PIN.assets["win32-x64"].name), APOSTATE_PIN.assets["win32-x64"].name)
+  assert.equal(releaseFileName("apostate-0.5.1-linux-x64.tar.zst"), "apostate-0.5.1-linux-x64.tar.zst")
+  // Remote text cannot climb out of the download folder or reach a drive.
+  assert.equal(releaseFileName("../../engine.key"), "engine.key")
+  assert.equal(releaseFileName("..\\..\\accounts.json"), "accounts.json")
+  assert.equal(releaseFileName("/etc/passwd"), "passwd")
+  assert.equal(releaseFileName("C:\\Windows\\System32\\evil.zip"), "evil.zip")
+  assert.equal(releaseFileName("sub/dir/payload.zip"), "payload.zip")
+  // Nothing usable in the name: the URL's own file name is tried next, then a neutral one.
+  assert.equal(releaseFileName("..", "https://example/apostate-linux-x64.tar.zst?token=1"), "apostate-linux-x64.tar.zst")
+  assert.equal(releaseFileName("", "https://example/download"), "download")
+  assert.equal(releaseFileName(""), "download")
+  assert.equal(releaseFileName(null, "not a url"), "download")
 })
 
 test("a local fingerprint browser is reused without touching the network", async () => {
@@ -202,6 +220,37 @@ test("a missing fingerprint browser is downloaded, verified and installed", asyn
   assert.match(picked.executable.replace(/^.*[\\/]browsers/, "browsers"), /^browsers[\\/]apostate[\\/]current[\\/].*[\\/]chrome\.exe$/)
   assert.equal(readFileSync(picked.executable, "utf8"), "browser")
   assert.equal(readFileSync(path.join(dir, "browsers", "apostate", "install.json"), "utf8").includes(`"sha256": "${sha}"`), true)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a release that announces a climbing file name still writes inside the install root", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-name-"))
+  const archive = storedZip([["apostate/chrome.exe", "browser"]])
+  const sha = createHash("sha256").update(archive).digest("hex")
+  const version = "0.5.1-name"
+  const downloadUrl = "https://example/apostate-windows-x64.zip"
+  // The name still carries the tokens the release picker looks for, so this asset is the one
+  // chosen; the climbing part is what must not survive into a file name.
+  const announced = "../../apostate-windows-x64.zip"
+  const fetchImpl = async (url) => {
+    if (url === `https://api.github.com/repos/heretic-tech/apostate/releases/tags/v${version}`) return response({ assets: [{ name: announced, browser_download_url: downloadUrl, size: archive.length }] })
+    if (url === `${downloadUrl}.manifest.json`) return response({ sha256: sha })
+    if (url === downloadUrl) return response(archive)
+    throw new Error(`unexpected fetch ${url}`)
+  }
+  const env = { HOME: dir, USERPROFILE: dir, LOCALAPPDATA: path.join(dir, "empty"), APPDATA: path.join(dir, "empty"), MUSE_WEB_FINGERPRINT_VERSION: version }
+  const picked = await ensureFingerprintBrowser({ dir, env, platform: "win32", arch: "x64", fetchImpl, exists: (p) => !p.startsWith(path.join(dir, "empty")), log: () => {} })
+  assert.equal(picked.source, "downloaded")
+  assert.equal(readFileSync(picked.executable, "utf8"), "browser")
+  // Nothing was written above the install root: no "<dir>/apostate-windows-x64.zip", no leftover
+  // download, and the data directory still holds nothing but the browser tree.
+  assert.equal(existsSync(path.join(dir, "apostate-windows-x64.zip")), false)
+  assert.equal(existsSync(path.join(dir, "..", "apostate-windows-x64.zip")), false)
+  assert.deepEqual(readdirSync(dir).filter((n) => n !== "browsers" && n !== "fingerprint.json"), [])
+  const leftover = path.join(dir, "browsers", "apostate", "download")
+  assert.equal(existsSync(leftover) ? readdirSync(leftover).length : 0, 0)
+  const install = JSON.parse(readFileSync(path.join(dir, "browsers", "apostate", "install.json"), "utf8"))
+  assert.equal(install.asset, "apostate-windows-x64.zip")
   rmSync(dir, { recursive: true, force: true })
 })
 

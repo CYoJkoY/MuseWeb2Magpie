@@ -407,6 +407,29 @@ function assetKey(platform: string, arch: string): string {
   return `${platform}-${cpu}`
 }
 
+// A release asset's name is remote text, and it decides the file name under
+// <dir>/browsers/apostate/download. Only its last path segment may be used: an absolute path, a
+// drive letter or a ".." segment would otherwise write the download outside the install root —
+// the same escape extractZip() already refuses for archive entries. The suffix survives, because
+// extractArchive() picks the format from it.
+export function releaseFileName(name: unknown, url: unknown = ""): string {
+  for (const raw of [name, urlBaseName(url)]) {
+    const text = String(raw ?? "").trim()
+    if (!text) continue
+    const base = text.replace(/\\/g, "/").split("/").pop() || ""
+    const stem = base.replace(/^\.+/, "").replace(/[^\w.+-]/g, "_")
+    if (stem) return stem
+  }
+  return "download"
+}
+
+// The file name a download URL ends in, with any query or fragment left out.
+function urlBaseName(url: unknown): string {
+  const text = String(url ?? "").trim()
+  if (!text) return ""
+  try { return path.posix.basename(new URL(text).pathname) } catch { return "" }
+}
+
 async function readManifestSha(fetchImpl: typeof fetch, url: string): Promise<string> {
   try {
     const res = await fetchImpl(`${url}.manifest.json`, { signal: AbortSignal.timeout(20_000) })
@@ -447,15 +470,18 @@ async function resolveAsset({ fetchImpl, version, platform, arch, log }: {
   const chosen = pickReleaseAsset(assets, platform, arch)
   if (chosen) {
     const url = String(chosen.browser_download_url || chosen.url || "")
-    const name = String(chosen.name || path.basename(url))
-    let sha = pinned && pinned.name === name ? pinned.sha256 : ""
+    const announced = String(chosen.name || urlBaseName(url))
+    // The pin still decides the hash by the name the release announces. The file that gets
+    // written uses the sanitized name, so a rewritten name no longer matches the pin and the
+    // download has to bring its own manifest hash — otherwise it is refused below.
+    let sha = pinned && pinned.name === announced ? pinned.sha256 : ""
     if (!sha) sha = await readManifestSha(fetchImpl, url)
-    return { name, url, sha256: sha, size: Number(chosen.size) || 0 }
+    return { name: releaseFileName(announced, url), url, sha256: sha, size: Number(chosen.size) || 0 }
   }
   if (pinned) {
     const tag = `v${String(version).replace(/^v/, "")}`
     const url = `https://github.com/${APOSTATE_REPO}/releases/download/${tag}/${pinned.name}`
-    return { name: pinned.name, url, sha256: pinned.sha256, size: 0 }
+    return { name: releaseFileName(pinned.name, url), url, sha256: pinned.sha256, size: 0 }
   }
   return null
 }

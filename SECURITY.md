@@ -118,6 +118,15 @@
     让引擎能被干净地关掉。镜像站照旧可以指向回环（`http://127.0.0.1:3000`），真实站点默认
     不需要配置。测试见 `test/site.test.ts`。设计见
     [`docs/adr/0010-configured-site-transport.md`](docs/adr/0010-configured-site-transport.md)。
+19. **发布包的文件名只取最后一段。** 指纹浏览器的下载地址和文件名来自远端（GitHub Release
+    API 的 `name` 字段），而这个名字决定 `<data>/browsers/apostate/download` 下真正写盘的
+    文件名。`engine/fingerprint.ts` 的 `releaseFileName()` 只保留最后一段路径、去掉前导点、
+    把其余字符压成安全集合：绝对路径、盘符和 `..` 段都进不了文件名，后缀保留（`extractArchive()`
+    靠它判断压缩格式）。名字里没有可用的一段时退回下载地址自己的文件名，再不行才用 `download`。
+    这和 `extractZip()` 对压缩包条目用的 `safeJoin()` 是同一条规则，只是对象换成了下载文件
+    本身。名字被改写后不再与固定版本的 sha256 对应，所以这次下载必须自带 `.manifest.json`
+    的哈希，否则校验不过、退回系统 Chromium。测试见 `test/fingerprint.test.ts`。设计见
+    [`docs/adr/0011-release-file-name.md`](docs/adr/0011-release-file-name.md)。
 
 ## 已知残留风险
 
