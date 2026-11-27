@@ -23,14 +23,13 @@
 
 以下每条都是设计约束，改动时请连同测试一起改，不要单向放松。
 
-1. **只监听回环。** `engine-go/main.go` 用 `net.Listen("tcp4", "127.0.0.1:<port>")`，端口来自
+1. **只监听回环。** `engine/main.ts` 用 `createServer(...).listen(port, "127.0.0.1")`，端口来自
    `MUSE_WEB_ENGINE_PORT`，默认固定为 `18611`；不存在对外监听的路径。
-2. **每个 `/v1/*` 都要密钥。** 路由以显式表声明（`engine-go/server.go` 的 `routes()`）：每行
+2. **每个 `/v1/*` 都要密钥。** 路由以显式表声明（`engine/server.ts` 的 `ROUTES`）：每行
    写明方法、路径、是否 `auth` 和处理函数；`route()` 在进入任何 handler 前统一调用
-   `authorize()`（解析 `Authorization: Bearer` 并与 `engine.key` 做
-   `subtle.ConstantTimeCompare`，失败回 401 `engine_key_invalid`）。新增端点 = 加一行，是否
-   免鉴权是表里的一个显式决定，`engine-go/server_test.go` 会核对「免鉴权的只有 health 和
-   登录进度页」。
+   `authorize()`（解析 `Authorization: Bearer` 并与 `engine.key` 做 `timingSafeEqual`，失败回
+   401 `engine_key_invalid`）。新增端点 = 加一行，是否免鉴权是表里的一个显式决定，
+   `test/engine-http.test.ts` 会核对「免鉴权的只有 health 和登录进度页」。
 3. **账号数据只有当前用户能读。** 数据目录 `0700`，`engine.key`、`accounts.json`、`engine.log`
    都是 `0600`（Windows 用当前用户目录的 ACL）；写入走临时文件 + 重命名的原子替换。
 4. **日志和错误体脱敏。** `redact()` 覆盖 `Bearer …`、URL 里的 `key=` / `token=` /
@@ -41,16 +40,17 @@
    DevTools WebSocket 握手，所以账号资料目录里加载的任何网页都连不上 CDP；引擎自己的客户端是不发
    `Origin` 的 WebSocket，仍然能连。`test/engine.test.ts` 守着这条参数，`test/bundled.test.ts`
    在真实浏览器上跑通整条链路。
-6. **请求体有上限，读请求有时间上限。** `readBody` 用 `http.MaxBytesReader`（8 MB）并把超限映射成
-   413 `request_too_large`；`http.Server` 由 `newHTTPServer()` 一处构造，设了 `ReadHeaderTimeout`、
-   `ReadTimeout`（30 秒，头与体一起计时）和 `MaxHeaderBytes`（32 KB），没有 `WriteTimeout`（会截断
-   SSE 流）。`ReadTimeout` 让一个只慢慢滴字节、迟迟不结束的请求无法长期占住进程——本机任何
-   用户都能连上端口，未带密钥的请求在读到正文之前就被拒，但连接本身仍可能被拖住，这条给它一个
-   截止时间。`engine-go/server_test.go`
-   的 `TestHTTPServerSetsItsLimits` 守住这些上限。
+6. **请求体有上限，读请求有时间上限。** `readBody()` 在 `MAX_REQUEST_BODY`（8 MB）处停下并把超限
+   映射成 413 `request_too_large`；`createServer()` 由 `newHTTPServer()` 一处构造，设了
+   `headersTimeout` / `requestTimeout`（30 秒，头与体一起计时）和 `maxHeaderSize`（32 KB），没有
+   响应超时（会截断 SSE 流）。读超时让一个只慢慢滴字节、迟迟不结束的请求无法长期占住进程——
+   本机任何用户都能连上端口，未带密钥的请求在读到正文之前就被拒，但连接本身仍可能被拖住，
+   这条给它一个截止时间。`test/engine-http.test.ts` 的
+   `the listener bounds a request but never a streaming answer` 守住这些上限。
 7. **响应不可被猜测和缓存。** 所有响应都带 `x-content-type-options: nosniff`，没有自己指定
    `cache-control` 的响应默认 `no-store`（SSE 流保留 `no-cache`）。
-8. **登录进度页是最小权限的静态页。** `/login/<id>` 用 `html/template` 转义，只带随机登录 ID，
+8. **登录进度页是最小权限的静态页。** `/login/<id>` 用 `engine/login-page.ts` 的 `escapeHTML()`
+   转义，只带随机登录 ID，
    不显示 cookie；响应头带 `content-security-policy: default-src 'none'; style-src 'unsafe-inline'; …`、
    `x-frame-options: DENY`、`referrer-policy: no-referrer`、`cache-control: no-store`。
 9. **下载与解压都不信输入。** 指纹浏览器下载固定版本并校验 sha256，失败就回退或报错，不会安装
@@ -61,14 +61,15 @@
     但调用方可以带 `x-muse-challenge: <nonce>`，引擎回 `proof = hex(HMAC-SHA256(engine.key,
     "muse-web-health:" + nonce))`。插件只有在 `proof` 与本地算出的值常量时间相等时，才会把
     `engine.key` 或账号句柄发给该端口；证明不了的端口一律不发。于是端口被抢先占用、或升级后仍在
-    运行的旧引擎，都拿不到 `engine.key`。Go 的 `healthProof` 与 `engine/health.ts` 逐字节一致，
-    `engine-go/health_test.go` 与 `test/engine-identity.test.ts` 守住这条；设计见
+    运行的旧引擎，都拿不到 `engine.key`。引擎（`engine/server.ts`）、插件与 connector 三处共用
+    `engine/health.ts` 的 `healthProof`，`test/engine-store.test.ts` 与 `test/engine-identity.test.ts`
+    用同一组固定向量守住这条；设计见
     [`docs/adr/0004-health-challenge.md`](docs/adr/0004-health-challenge.md)。
-12. **Host 头只接受回环名。** `ServeHTTP` 在路由之前检查 `Host`：只有 `127.0.0.1`、`localhost`、
+12. **Host 头只接受回环名。** `engine/server.ts` 的 `handle()` 在路由之前检查 `Host`：只有 `127.0.0.1`、`localhost`、
     `[::1]` / `::1` 和 `0.0.0.0`（可带端口）被接受，其它一律 403 `host_not_allowed`。DNS
     rebinding 的页面到达端口时仍带着自己的域名，这条检查让未来任何免鉴权 GET（health、登录
-    进度页）都不会变成网页可读的答案。`engine-go/server_test.go` 的
-    `TestHostHeaderMustBeLoopback` 守住这条。
+    进度页）都不会变成网页可读的答案。`test/engine-http.test.ts` 的
+    `the Host header must name this machine` 守住这条。
 13. **凭据只在回环或 https 上传输。** `engine.key` 和账号句柄是凭据。插件指向一个外部引擎
     （`MUSE_WEB_ENGINE` / `engine` 选项）时，`engine/local-fetch.ts` 的 `credentialSafeUrl()` 只在
     目标是本机回环地址或 `https:` 时才允许发送它们；一个明文 http 的局域网 / 域名地址——无论是
@@ -76,16 +77,17 @@
     「引擎连不上」并说明必须用 https 或 127.0.0.1，连接根本不会建立。`test/engine-origin.test.ts`
     钉住允许与拒绝的集合，以及「被拒的地址一字节密钥都收不到」。
 14. **`/v1/health` 只回答最少的信息。** 这是免鉴权端点，任何本机用户都能问，所以它只说「引擎在、
-    哪个版本」，不再返回账号数（账号数在密钥之后的 `/v1/accounts`）。`engine-go/server_test.go`
-    的 `TestHealthDoesNotCountAccounts` 守住这条。
-15. **一行一条日志，谁都伪造不了。** `engine-go/config.go` 的 `logger.Log()` 是写 `engine.log`
+    哪个版本」，不再返回账号数（账号数在密钥之后的 `/v1/accounts`）。`test/engine-http.test.ts`
+    的 `health stays thin: it names the engine, not the accounts behind the key` 守住这条。
+15. **一行一条日志，谁都伪造不了。** `engine/log.ts` 的 `Logger.log()` 是写 `engine.log`
     的唯一出口，每条记录先过 `oneLine()`：`\r`、`\n`、`\t`、其余 C0 控制字符、DEL 以及
     U+2028 / U+2029 一律换成空格，单条上限 2048 字节。请求路径写进日志时是百分号解码后的样子，
     所以一个**不带密钥**的本机请求原本可以用 `%0A` 往 `engine.log` 里接一条
     「200 GET /v1/accounts account=…」——读日志的人分不出真假。现在客户端给的路径、驱动来的消息、
     子进程 stderr 都不可能多出一行。驱动 stderr 的 `lineWriter` 同时把「还没等到换行」的缓冲限制在
-    64 KB，一个只写不换行的子进程不再能把引擎内存拖大。`engine-go/log_test.go` 的
-    `TestUnauthenticatedRequestCannotForgeALogRecord` 用免鉴权请求钉住这条。设计见
+    64 KB，一个只写不换行的子进程不再能把引擎内存拖大。`test/engine-http.test.ts` 的
+    `one unauthenticated request writes one log record` 与 `test/engine-log.test.ts` 用免鉴权请求
+    钉住这条。设计见
     [`docs/adr/0007-log-integrity.md`](docs/adr/0007-log-integrity.md)。
 16. **免鉴权的那一面不做活，整面都有固定的在飞上限。** `GET /login/{id}` 是唯一一个人（不是插件）
     不带密钥就会打开的端点，所以它也是最便宜的攻击面。（1）登录 ID 在路由的匹配器里就按
@@ -95,7 +97,7 @@
     约 100 KB 的驱动事件通道；（3）每个非 health 的路由都要先取一个在飞令牌：免鉴权面 4 个、
     持密钥面 64 个，满了直接 503 `engine_busy`（`Retry-After: 1`）而不是排队。**鉴权在取令牌
     之前**，所以刷错密钥只能花常数时间、拿不到令牌，挤不掉真正持钥的调用；`/v1/health` 豁免，
-    因为在飞的引擎不能被答成「引擎不在」。`engine-go/admission_test.go` 把这几条都钉住：页面
+    因为在飞的引擎不能被答成「引擎不在」。`test/engine-http.test.ts` 把这几条都钉住：页面
     GET 之后标记文件不存在、同一运行时下带密钥的 `POST /v1/login` 之后存在，两个预算各自打满
     与释放，以及错密钥不占令牌。设计见
     [`docs/adr/0008-admission-control.md`](docs/adr/0008-admission-control.md)。

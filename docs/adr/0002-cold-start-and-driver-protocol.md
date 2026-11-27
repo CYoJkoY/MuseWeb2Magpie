@@ -1,5 +1,7 @@
 # ADR 0002: Bounded cold start and a leaner driver protocol
 
+> Note (`0.12.0`): the engine is TypeScript now; the `engine-go/*` paths below name the pre-`0.12.0` Go engine. See [ADR 0016](0016-typescript-engine.md).
+
 ## Status
 
 Accepted for `0.11.0`.

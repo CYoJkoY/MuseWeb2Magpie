@@ -35,11 +35,10 @@
 git clone https://github.com/CYoJkoY/MuseWeb2Magpie.git
 cd MuseWeb2Magpie
 npm install
-npm run build:engine
-./engine-go/bin/<os>-<arch>/muse-web-engine
+node engine/main.ts
 ```
 
-引擎是 Go 原生二进制，`npm run build:engine` 会为当前平台构建它；运行时需要本机有 Node.js，引擎用它加载 `engine/driver.ts` 操作浏览器。启动后它会打印监听地址和数据目录。默认：
+引擎是 TypeScript，用 Node.js（`>=22.18`，默认能从 `.ts` 里剥掉类型标注）直接运行 `engine/main.ts`，不需要构建或另装二进制；引擎用同一个运行时加载 `engine/driver.ts` 操作浏览器。启动后它会打印监听地址和数据目录。默认：
 
 ```text
 http://127.0.0.1:18611
@@ -104,7 +103,7 @@ magpie plugin login muse-web
 
 | 现象 | 处理 |
 |---|---|
-| `muse-web 引擎没有响应` | 先 `npm run build:engine` 再运行 `muse-web-engine`，确认 `MUSE_WEB_ENGINE` 地址和端口 |
+| `muse-web 引擎没有响应` | 先 `node engine/main.ts`（在完整版仓库里），确认 `MUSE_WEB_ENGINE` 地址和端口 |
 | `引擎不可以用`（提到 https / 回环） | `MUSE_WEB_ENGINE` 必须是本机回环地址或 `https`，明文 http 的外部地址不再接受 |
 | 反复提示引擎不响应、旧版引擎 | 连接的引擎须支持 `/v1/health` 的 HMAC 自证（完整版 0.11 起的引擎都支持），旧引擎请升级后重启 |
 | `engine_key_invalid` / 401 | `MUSE_WEB_ENGINE_KEY` 与数据目录里的 `engine.key` 不一致 |
@@ -116,8 +115,8 @@ magpie plugin login muse-web
 
 A connector edition of [MuseWeb2Magpie](https://github.com/CYoJkoY/MuseWeb2Magpie): it talks to a
 `muse-web` engine you run yourself over loopback HTTP. It never starts a browser, never reads cookie files
-and never spawns a process. Build the engine with `npm run build:engine` and run the `muse-web-engine`
-binary (it needs Node.js on `PATH` to load `engine/driver.ts`), set `MUSE_WEB_ENGINE` and
+and never spawns a process. Run the engine with `node engine/main.ts` from the full-edition repo
+(Node.js `>=22.18` strips the types, and the same runtime loads `engine/driver.ts`), set `MUSE_WEB_ENGINE` and
 `MUSE_WEB_ENGINE_KEY`, then `magpie plugin add magpie-muse-web-connector` and `magpie plugin login muse-web`.
 Use the full edition if you want the bundled engine. Same provider id (`muse-web`), so install one, not both.
 Credentials (`engine.key` and account handles) only travel to loopback or over `https:` — a

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the release after `0.11.0` (see `CHANGELOG.md`, "未发布").
+Accepted for `0.12.0`.
 
 ## Context
 

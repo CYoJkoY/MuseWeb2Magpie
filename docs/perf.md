@@ -2,12 +2,14 @@
 
 This note records how the cold-start and driver-protocol work in `0.11.0` was measured, what the
 numbers were, and where the hot paths are. It is upkeep notes, not a promise about any particular
-machine or network.
+machine or network. The engine became TypeScript in `0.12.0`; the measured numbers below are from
+the Go engine that shipped in `0.11.0` and have not been re-measured since — see
+[After the port](#after-the-port).
 
 ## What was optimized
 
 - Cold start runs the usage reads that follow warming in a bounded pool of three accounts on both
-  the Go engine and the TypeScript driver, instead of one after another.
+  the engine and the TypeScript driver, instead of one after another.
 - Cookie injection places every cookie in one `Storage.setCookies`, with a per-cookie fallback.
 - Sending a message focuses, scrolls and measures the composer in one page evaluation.
 - The delayed usage refresh after an answer checks the account's busy flag before opening a tab.
@@ -16,16 +18,9 @@ See `docs/adr/0002-cold-start-and-driver-protocol.md` for why each was chosen.
 
 ## How to measure
 
-Local protocol costs are plain Go benchmarks; no browser, network, or account is involved:
-
-```sh
-npm run bench
-# or
-go -C engine-go test -run '^$' -bench . -benchmem -count 3 ./...
-```
-
-The cold-start and end-to-end paths need a real browser and are covered by `npm test`, which drives
-a headless Chrome/Edge against a loopback fake muse.ai:
+`0.12.0` ships no micro-benchmark harness; the numbers below come from the Go engine's benchmarks,
+which no longer exist. The cold-start and end-to-end paths need a real browser and are covered by
+`npm test`, which drives a headless Chrome/Edge against a loopback fake muse.ai:
 
 ```sh
 npm test
@@ -37,8 +32,8 @@ chat.
 
 ## Measured protocol cost
 
-`go1.27.4`, `windows/amd64`, Intel Core i5-13500H. Three runs each with the default benchtime; the
-table shows the median.
+These are the `0.11.0` Go engine's numbers. `go1.27.4`, `windows/amd64`, Intel Core i5-13500H.
+Three runs each with the default benchtime; the table shows the median.
 
 | Benchmark | ns/op | B/op | allocs/op |
 | :--- | ---: | ---: | ---: |
@@ -58,16 +53,9 @@ Reading the numbers:
 
 ## CPU profile
 
-The benchmarks above show per-operation cost; the CPU profile shows where that time goes. Point
-`-cpuprofile` at a scratch path; `*.prof` is ignored so a stray profile cannot be committed.
-
-```sh
-go -C engine-go test -run '^$' -bench . -benchtime 2s -cpuprofile cpu.prof ./...
-go -C engine-go tool pprof -top -nodecount=14 cpu.prof
-```
-
-`-benchtime 2s` matters: the default 300 ms per benchmark is too short for the sampler to collect
-enough ticks, and a run at that length produced zero samples.
+The `0.11.0` Go engine's profile. `-benchtime 2s` mattered there: the default 300 ms per benchmark
+was too short for the sampler to collect enough ticks, and a run at that length produced zero
+samples.
 
 One run on the machine above collected 17,270 ms of samples over 13.5 s. The top flat nodes:
 
@@ -101,15 +89,25 @@ Reading the profile:
 
 ## Hot paths
 
-- **Engine → driver:** each operation is one JSON object written by `driver.send` (`json.Marshal`)
+- **Engine → driver:** each operation is one JSON object written by `Driver.send` (`JSON.stringify`)
   and one line on stdin. A chat is one `chat_stream` request; its answer arrives as a stream of
   `delta` lines plus a `final`.
-- **Driver → engine:** `driver.readLoop` unmarshals every line into `event` and hands it to
-  `dispatch`, which routes it to the waiting call or treats it as an unsolicited `cookies`, `lost`
-  or `log`.
+- **Driver → engine:** `Driver.readLoop` parses every line and hands it to `dispatch`, which routes
+  it to the waiting call or treats it as an unsolicited `cookies`, `lost` or `log`.
 - **Per HTTP request:** `authorize` checks the bearer key, `account` decides which account answers,
   and `store.Get` returns that account's copy.
 - **Cold start:** warm all accounts in parallel, then read usage in the pool of three. The two
   phases are logged separately.
 - **A chat:** `acquire` marks the account busy, `chat_stream` streams deltas, and 1.5 s after the
   answer a usage refresh runs unless a new chat already owns the account.
+
+<a name="after-the-port"></a>
+
+## After the port
+
+`0.12.0` replaced the Go engine with `engine/main.ts` and friends, keeping the same NDJSON protocol,
+the same bounded pool of three, and the same `engine.log` timing lines (`prewarm accounts=N
+warm=Xms total=Yms`, `warm done accounts=N Xms`, `first=…ms`). The structural conclusions above
+still hold — local protocol work is spread thin and a real chat is dominated by the browser and
+muse.ai — but the per-operation numbers were not re-measured on the TypeScript engine, so treat
+the tables as a `0.11.0` record rather than a current claim.
