@@ -25,8 +25,12 @@
 
 1. **只监听回环。** `engine-go/main.go` 用 `net.Listen("tcp4", "127.0.0.1:<port>")`，端口来自
    `MUSE_WEB_ENGINE_PORT`，默认固定为 `18611`；不存在对外监听的路径。
-2. **每个 `/v1/*` 都要密钥。** `engine-go/server.go` 的 `authorize()` 解析 `Authorization: Bearer`
-   并与 `engine.key` 做 `subtle.ConstantTimeCompare`，失败回 401 `engine_key_invalid`。
+2. **每个 `/v1/*` 都要密钥。** 路由以显式表声明（`engine-go/server.go` 的 `routes()`）：每行
+   写明方法、路径、是否 `auth` 和处理函数；`route()` 在进入任何 handler 前统一调用
+   `authorize()`（解析 `Authorization: Bearer` 并与 `engine.key` 做
+   `subtle.ConstantTimeCompare`，失败回 401 `engine_key_invalid`）。新增端点 = 加一行，是否
+   免鉴权是表里的一个显式决定，`engine-go/server_test.go` 会核对「免鉴权的只有 health 和
+   登录进度页」。
 3. **账号数据只有当前用户能读。** 数据目录 `0700`，`engine.key`、`accounts.json`、`engine.log`
    都是 `0600`（Windows 用当前用户目录的 ACL）；写入走临时文件 + 重命名的原子替换。
 4. **日志和错误体脱敏。** `redact()` 覆盖 `Bearer …`、URL 里的 `key=` / `token=` /
@@ -55,6 +59,11 @@
     运行的旧引擎，都拿不到 `engine.key`。Go 的 `healthProof` 与 `engine/health.ts` 逐字节一致，
     `engine-go/health_test.go` 与 `test/engine-identity.test.ts` 守住这条；设计见
     [`docs/adr/0004-health-challenge.md`](docs/adr/0004-health-challenge.md)。
+12. **Host 头只接受回环名。** `ServeHTTP` 在路由之前检查 `Host`：只有 `127.0.0.1`、`localhost`、
+    `[::1]` / `::1` 和 `0.0.0.0`（可带端口）被接受，其它一律 403 `host_not_allowed`。DNS
+    rebinding 的页面到达端口时仍带着自己的域名，这条检查让未来任何免鉴权 GET（health、登录
+    进度页）都不会变成网页可读的答案。`engine-go/server_test.go` 的
+    `TestHostHeaderMustBeLoopback` 守住这条。
 
 ## 已知残留风险
 
@@ -90,3 +99,5 @@ only ever sends `engine.key` to a port that proves it holds the key, so a squatt
 pre-upgrade engine is never handed the key. Known limits: same-user processes are trusted by
 design, and upstream error text may still contain ordinary strings. Please report issues without
 cookies, `engine.key`, or unscrubbed logs.
+The Host header must address 127.0.0.1 or localhost; anything else gets 403 `host_not_allowed`
+before routing, so DNS-rebound pages cannot read even the unauthenticated answers.

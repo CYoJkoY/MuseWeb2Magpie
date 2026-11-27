@@ -2,6 +2,15 @@
 
 ## 未发布
 
+- 安全：引擎的 HTTP 层重构为显式路由表（`engine-go/server.go` 的 `routes()`）：每个端点一行，
+  写明方法、路径、是否需要密钥和处理函数；`route()` 在进入任何 handler 前统一鉴权，「每个
+  `/v1/*` 都要密钥」从「每个作者记得写」变成表里声明的一行，新增 `engine-go/server_test.go`
+  遍历路由表核对鉴权与免鉴权集合（免鉴权的只有 health 和登录进度页）。外部行为不变：方法
+  不匹配仍是 404。
+- 安全：`ServeHTTP` 在路由之前检查 `Host` 头，只接受 `127.0.0.1`、`localhost`、`[::1]` 和
+  `0.0.0.0`（可带端口），其它一律 403 `host_not_allowed`。DNS rebinding 的页面到达端口时仍
+  带着自己的域名，从此连免鉴权的 health 答案和登录进度页也读不到。设计见
+  `docs/adr/0005-route-table-and-host-guard.md`，`SECURITY.md` 的不变量相应从十一条变十二条。
 - 安全：插件现在先让端口证明自己持有 `engine.key`，再把密钥发过去。`/v1/health` 仍然免鉴权，但带 `x-muse-challenge: <nonce>` 时引擎会回 `proof = hex(HMAC-SHA256(engine.key, "muse-web-health:" + nonce))`，插件只在常量时间比较通过后才发密钥或账号句柄；证明不了的端口一律不发。端口被抢注、或升级后仍在运行的旧版引擎，从此拿不到 `engine.key`，插件改为直接报「端口被占用」并提示重启 Magpie。Go 与 TypeScript 两侧的 HMAC 实现由同一组固定向量钉住（`engine-go/health_test.go`），新增 Chrome-free 的 `test/engine-identity.test.ts` 覆盖「冒充者拿不到密钥」与「能证明的旧引擎带密钥退役」，真实浏览器测试里的旧引擎假件也改为按真实方式自证。设计见 `docs/adr/0004-health-challenge.md`，`SECURITY.md` 的不变量相应从十条变十一条。
 - 文档：`README` 补充「端口先证明身份才拿得到密钥」的安全边界与「升级后提示端口被占用」的排查条目；`docs/adr/0003` 里延期实现的 health challenge 改为指向 ADR 0004。
 - 安全：引擎浏览器不再带 `--remote-allow-origins=*`。DevTools 仍然只绑 `127.0.0.1` 的随机端口，但浏览器会拒绝带 `Origin` 头的握手，所以账号资料目录里加载的网页再也连不上 CDP——控制不了浏览器，也读不到 muse.ai 会话。引擎自己的客户端不发 `Origin`，照常连接；单测守住这条参数，真实浏览器测试跑通整条链路，Wayfern 内核上的冒烟验证里裸握手能连、带 `Origin: http://evil.test` 的握手回 403。

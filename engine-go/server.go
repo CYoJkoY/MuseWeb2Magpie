@@ -210,6 +210,7 @@ type engine struct {
 	log   *logger
 	store *store
 	drv   *driver
+	table []route
 
 	busyMu sync.Mutex
 	busy   map[string]bool
@@ -222,7 +223,7 @@ type engine struct {
 }
 
 func newEngine(cfg config, log *logger, st *store, drv *driver) *engine {
-	return &engine{cfg: cfg, log: log, store: st, drv: drv, busy: map[string]bool{}, lastUse: time.Now()}
+	return &engine{cfg: cfg, log: log, store: st, drv: drv, table: routes(), busy: map[string]bool{}, lastUse: time.Now()}
 }
 
 func (e *engine) touch() {
@@ -291,6 +292,63 @@ func (e *engine) authorize(r *http.Request) error {
 	return nil
 }
 
+// route declares one endpoint of the loopback surface: how it matches, whether it needs the
+// engine key, and who answers it. The table is built once per engine, so adding an endpoint
+// means adding a row — and the tests read the same table to prove the auth rule holds.
+type route struct {
+	method  string
+	pattern string
+	match   func(path string) (string, bool)
+	auth    bool
+	handle  func(e *engine, res *response, r *http.Request, m *meta, param string) error
+}
+
+func routes() []route {
+	return []route{
+		{method: http.MethodGet, pattern: "/v1/health", auth: false, handle: (*engine).handleHealth},
+		{method: http.MethodGet, pattern: "/v1/models", auth: true, handle: (*engine).handleModels},
+		{method: http.MethodGet, pattern: "/v1/accounts", auth: true, handle: (*engine).handleAccounts},
+		{method: http.MethodPost, pattern: "/v1/chat/completions", auth: true, handle: (*engine).handleChat},
+		{method: http.MethodPost, pattern: "/v1/session/refresh", auth: true, handle: (*engine).handleRefresh},
+		{method: http.MethodGet, pattern: "/v1/usage", auth: true, handle: (*engine).handleUsage},
+		{method: http.MethodPost, pattern: "/v1/shutdown", auth: true, handle: (*engine).handleShutdown},
+		{method: http.MethodPost, pattern: "/v1/login", auth: true, handle: (*engine).handleLoginStart},
+		{method: http.MethodGet, pattern: "/v1/login/{id}", auth: true, match: matchLoginID("/v1/login/"), handle: (*engine).handleLoginState},
+		{method: http.MethodGet, pattern: "/login/{id}", auth: false, match: matchLoginID("/login/"), handle: (*engine).handleLoginPage},
+	}
+}
+
+// matchLoginID keeps the one rule both login paths share: a non-empty id with no slash in it.
+func matchLoginID(prefix string) func(path string) (string, bool) {
+	return func(path string) (string, bool) {
+		id, ok := strings.CutPrefix(path, prefix)
+		return id, ok && id != "" && !strings.Contains(id, "/")
+	}
+}
+
+// loopbackHost reports whether the request's Host header names this engine's loopback address. A
+// page that reached the port through DNS rebinding still carries its own domain in Host, so
+// accepting only loopback names keeps any unauthenticated GET — health, the login progress page
+// — from becoming readable by a web page that faked its way here.
+func loopbackHost(hostport string) bool {
+	host := strings.ToLower(strings.TrimSpace(hostport))
+	host = strings.TrimSuffix(host, ".")
+	// Strip the port. An IPv6 literal keeps its brackets; a bare "::1" has several colons and no
+	// port, so the colon rule below must not eat it.
+	if strings.HasPrefix(host, "[") {
+		if at := strings.Index(host, "]"); at >= 0 {
+			host = host[:at+1]
+		}
+	} else if at := strings.LastIndex(host, ":"); at >= 0 && !strings.Contains(host[:at], ":") {
+		host = host[:at]
+	}
+	switch host {
+	case "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0":
+		return true
+	}
+	return false
+}
+
 func (e *engine) account(r *http.Request) (account, error) {
 	id := strings.TrimSpace(r.Header.Get("x-muse-account"))
 	if id == "" {
@@ -308,7 +366,15 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	e.touch()
 	res := newResponse(w)
 	m := &meta{}
-	err := e.route(res, r, m)
+	var err error
+	// The Host header check goes before any routing: a page that reached this port through DNS
+	// rebinding still names its own domain here, and the unauthenticated health answer and login
+	// progress page must not become readable by it.
+	if !loopbackHost(r.Host) {
+		err = fail(403, "requests must address 127.0.0.1 or localhost", "host_not_allowed")
+	} else {
+		err = e.route(res, r, m)
+	}
 	if err != nil {
 		m.reason = redact(err.Error())
 		if !res.wrote {
@@ -342,107 +408,122 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (e *engine) route(res *response, r *http.Request, m *meta) error {
 	path := r.URL.Path
-	switch {
-	case r.Method == http.MethodGet && path == "/v1/health":
-		body := map[string]any{"ok": true, "engine": engineName, "version": version, "accounts": e.store.Count()}
-		// A caller may ask the port to prove it holds engine.key: it sends a nonce and gets back an
-		// HMAC it can check locally. Without the challenge nothing extra is revealed, and the key
-		// itself is never part of the answer.
-		if nonce := strings.TrimSpace(r.Header.Get("x-muse-challenge")); validNonce(nonce) {
-			body["proof"] = healthProof(e.cfg.key, nonce)
+	// Dispatch is one walk over a table built once at start-up. Authorization is decided by the
+	// row, not by remembering to call authorize() inside a handler: a new endpoint that declares
+	// auth: true is guarded before its handler can read a byte of the body.
+	for i := range e.table {
+		rt := &e.table[i]
+		if r.Method != rt.method {
+			continue
 		}
-		res.json(200, body)
-		return nil
-	case r.Method == http.MethodGet && path == "/v1/models":
-		if err := e.authorize(r); err != nil {
-			return err
+		param := ""
+		ok := false
+		if rt.match == nil {
+			ok = path == rt.pattern
+		} else {
+			param, ok = rt.match(path)
 		}
-		res.json(200, map[string]any{"object": "list", "data": []any{
-			map[string]any{"id": modelName, "object": "model", "owned_by": "muse.ai"},
-		}})
-		return nil
-	case r.Method == http.MethodGet && path == "/v1/accounts":
-		if err := e.authorize(r); err != nil {
-			return err
+		if !ok {
+			continue
 		}
-		handles := e.store.Handles()
-		accounts := make([]map[string]any, 0, len(handles))
-		for _, id := range handles {
-			acct, ok := e.store.Get(id)
-			if !ok {
-				continue
-			}
-			accounts = append(accounts, map[string]any{"id": id, "label": acct.Label, "expires": expiryMS(acct.CookiesExp)})
-		}
-		res.json(200, map[string]any{"accounts": accounts})
-		return nil
-	case r.Method == http.MethodPost && path == "/v1/chat/completions":
-		if err := e.authorize(r); err != nil {
-			return err
-		}
-		return e.chat(res, r, m)
-	case r.Method == http.MethodPost && path == "/v1/session/refresh":
-		if err := e.authorize(r); err != nil {
-			return err
-		}
-		return e.refresh(res, r, m)
-	case r.Method == http.MethodGet && path == "/v1/usage":
-		if err := e.authorize(r); err != nil {
-			return err
-		}
-		return e.usage(res, r, m)
-	case r.Method == http.MethodPost && path == "/v1/shutdown":
-		if err := e.authorize(r); err != nil {
-			return err
-		}
-		res.json(200, map[string]any{"ok": true})
-		if e.stop != nil {
-			go func() {
-				time.Sleep(100 * time.Millisecond)
-				e.stop("asked to stop")
-			}()
-		}
-		return nil
-	case r.Method == http.MethodPost && path == "/v1/login":
-		if err := e.authorize(r); err != nil {
-			return err
-		}
-		return e.loginStart(res, r)
-	}
-	if r.Method == http.MethodGet {
-		if id, ok := strings.CutPrefix(path, "/v1/login/"); ok && id != "" && !strings.Contains(id, "/") {
+		if rt.auth {
 			if err := e.authorize(r); err != nil {
 				return err
 			}
-			state, err := e.loginState(r.Context(), id)
-			if err != nil {
-				return err
-			}
-			if state == nil {
-				return fail(404, "no such login", "login_not_found")
-			}
-			res.json(200, state)
-			return nil
 		}
-		if id, ok := strings.CutPrefix(path, "/login/"); ok && id != "" && !strings.Contains(id, "/") {
-			state, err := e.loginState(r.Context(), id)
-			if err != nil {
-				state = nil
-			}
-			// The progress page is opened by a person in their own browser, driven by a URL that
-			// carries a login id: keep it out of frames, out of caches and out of any third-party
-			// request. It needs no script at all, only its own inline styles.
-			res.header(200, "text/html; charset=utf-8", map[string]string{
-				"cache-control":           "no-store",
-				"content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-				"x-frame-options":         "DENY",
-				"referrer-policy":         "no-referrer",
-			})
-			_, _ = io.WriteString(res.w, loginPage(state))
-			return nil
-		}
+		return rt.handle(e, res, r, m, param)
 	}
 	return fail(404, "not found", "not_found")
+}
+
+func (e *engine) handleHealth(res *response, r *http.Request, m *meta, param string) error {
+	body := map[string]any{"ok": true, "engine": engineName, "version": version, "accounts": e.store.Count()}
+	// A caller may ask the port to prove it holds engine.key: it sends a nonce and gets back an
+	// HMAC it can check locally. Without the challenge nothing extra is revealed, and the key
+	// itself is never part of the answer.
+	if nonce := strings.TrimSpace(r.Header.Get("x-muse-challenge")); validNonce(nonce) {
+		body["proof"] = healthProof(e.cfg.key, nonce)
+	}
+	res.json(200, body)
+	return nil
+}
+
+func (e *engine) handleModels(res *response, r *http.Request, m *meta, param string) error {
+	res.json(200, map[string]any{"object": "list", "data": []any{
+		map[string]any{"id": modelName, "object": "model", "owned_by": "muse.ai"},
+	}})
+	return nil
+}
+
+func (e *engine) handleAccounts(res *response, r *http.Request, m *meta, param string) error {
+	handles := e.store.Handles()
+	accounts := make([]map[string]any, 0, len(handles))
+	for _, id := range handles {
+		acct, ok := e.store.Get(id)
+		if !ok {
+			continue
+		}
+		accounts = append(accounts, map[string]any{"id": id, "label": acct.Label, "expires": expiryMS(acct.CookiesExp)})
+	}
+	res.json(200, map[string]any{"accounts": accounts})
+	return nil
+}
+
+func (e *engine) handleChat(res *response, r *http.Request, m *meta, param string) error {
+	return e.chat(res, r, m)
+}
+
+func (e *engine) handleRefresh(res *response, r *http.Request, m *meta, param string) error {
+	return e.refresh(res, r, m)
+}
+
+func (e *engine) handleUsage(res *response, r *http.Request, m *meta, param string) error {
+	return e.usage(res, r, m)
+}
+
+func (e *engine) handleShutdown(res *response, r *http.Request, m *meta, param string) error {
+	res.json(200, map[string]any{"ok": true})
+	if e.stop != nil {
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			e.stop("asked to stop")
+		}()
+	}
+	return nil
+}
+
+func (e *engine) handleLoginStart(res *response, r *http.Request, m *meta, param string) error {
+	return e.loginStart(res, r)
+}
+
+func (e *engine) handleLoginState(res *response, r *http.Request, m *meta, param string) error {
+	state, err := e.loginState(r.Context(), param)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return fail(404, "no such login", "login_not_found")
+	}
+	res.json(200, state)
+	return nil
+}
+
+func (e *engine) handleLoginPage(res *response, r *http.Request, m *meta, param string) error {
+	state, err := e.loginState(r.Context(), param)
+	if err != nil {
+		state = nil
+	}
+	// The progress page is opened by a person in their own browser, driven by a URL that
+	// carries a login id: keep it out of frames, out of caches and out of any third-party
+	// request. It needs no script at all, only its own inline styles.
+	res.header(200, "text/html; charset=utf-8", map[string]string{
+		"cache-control":           "no-store",
+		"content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+		"x-frame-options":         "DENY",
+		"referrer-policy":         "no-referrer",
+	})
+	_, _ = io.WriteString(res.w, loginPage(state))
+	return nil
 }
 
 type chatRequest struct {
