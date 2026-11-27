@@ -34,13 +34,13 @@
   ],
   "author": "JohnWang (https://github.com/JohnWangggg)",
   "license": "MIT",
-  "homepage": "https://github.com/JohnWangggg/magpie-muse-web#readme",
+  "homepage": "https://github.com/CYoJkoY/MuseWeb2Magpie#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JohnWangggg/magpie-muse-web.git"
+    "url": "git+https://github.com/CYoJkoY/MuseWeb2Magpie.git"
   },
   "bugs": {
-    "url": "https://github.com/JohnWangggg/magpie-muse-web/issues"
+    "url": "https://github.com/CYoJkoY/MuseWeb2Magpie/issues"
   },
   "engines": {
     "node": ">=22.18"

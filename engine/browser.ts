@@ -195,8 +195,9 @@ export interface LaunchOptions {
 
 export async function launchBrowser({ executable, profileDir, temporary = false, headless = true, hidden = false, proxy = "", url = "about:blank", port, waitMs = 30_000, extraArgs = [] }: LaunchOptions): Promise<Launched> {
   if (!executable) {
-    throw new Error("没找到可用的浏览器：开源指纹浏览器 Apostate 没能下载，本机也没有 Chrome、Edge 或 Chromium；"
-      + "联网后重试，或用 MUSE_WEB_FINGERPRINT_BROWSER / MUSE_WEB_CHROME 指定一个可执行文件")
+    throw new Error("没找到可用的浏览器：本机没有 Donut Browser 和内嵌的 Wayfern 内核，开源指纹浏览器 Apostate 也没能下载，"
+      + "本机也没有 Chrome、Edge 或 Chromium；联网后重试，或用 MUSE_WEB_DONUT_BROWSER / MUSE_WEB_FINGERPRINT_BROWSER"
+      + " / MUSE_WEB_CHROME 指定一个可执行文件")
   }
   mkdirSync(profileDir, { recursive: true })
   port ??= await freePort()

@@ -103,7 +103,7 @@ function prepareBrowser() {
       log(`browser: ${fallbackExecutable} (system)`)
       return { executable: fallbackExecutable, extraArgs: [], source: "system", version: "" }
     }
-    log("browser: 没有可用的浏览器——指纹浏览器没能下载，本机也没有 Chrome、Edge 或 Chromium")
+    log("browser: 没有可用的浏览器——没找到 Donut Browser 的 Wayfern 内核，指纹浏览器也没能下载，本机也没有 Chrome、Edge 或 Chromium")
     return null
   })()
   return browserReady

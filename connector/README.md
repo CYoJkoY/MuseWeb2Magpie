@@ -1,6 +1,6 @@
 <p align="center"><img src="icon.svg" width="72" height="72" alt=""></p>
 
-<h1 align="center">magpie-muse-web-connector</h1>
+<h1 align="center">MuseWeb2Magpie Connector</h1>
 
 <p align="center">
   把 <a href="https://muse.ai">muse.ai</a> 接进 <a href="https://github.com/yetone/magpie">Magpie</a> 的
@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  Provider id：<code>muse-web</code> · 模型：<code>muse-web/muse-spark</code> · 引擎需另行运行 · MIT
+  包名：<code>magpie-muse-web-connector</code> · Provider id：<code>muse-web</code> · 模型：<code>muse-web/muse-spark</code> · 引擎需另行运行 · MIT
 </p>
 
 ---
 
 ## 和完整版怎么选
 
-| | 本 connector | [magpie-muse-web](https://github.com/JohnWangggg/magpie-muse-web) 完整版 |
+| | 本 connector | [MuseWeb2Magpie](https://github.com/CYoJkoY/MuseWeb2Magpie) 完整版 |
 |---|---|---|
 | 引擎 | 你另行运行 | 插件自带，随 Magpie 启停 |
 | 浏览器 | 引擎打开 | 引擎打开 |
@@ -32,8 +32,8 @@
 引擎在完整版的仓库里，和完整版是同一份代码：
 
 ```sh
-git clone https://github.com/JohnWangggg/magpie-muse-web.git
-cd magpie-muse-web
+git clone https://github.com/CYoJkoY/MuseWeb2Magpie.git
+cd MuseWeb2Magpie
 npm install
 npm run build:engine
 ./engine-go/bin/<os>-<arch>/muse-web-engine
@@ -108,7 +108,7 @@ magpie plugin login muse-web
 
 ## English
 
-A connector edition of [magpie-muse-web](https://github.com/JohnWangggg/magpie-muse-web): it talks to a
+A connector edition of [MuseWeb2Magpie](https://github.com/CYoJkoY/MuseWeb2Magpie): it talks to a
 `muse-web` engine you run yourself over loopback HTTP. It never starts a browser, never reads cookie files
 and never spawns a process. Build the engine with `npm run build:engine` and run the `muse-web-engine`
 binary (it needs Node.js on `PATH` to load `engine/driver.ts`), set `MUSE_WEB_ENGINE` and

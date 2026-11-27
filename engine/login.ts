@@ -104,7 +104,7 @@ export class Logins {
     // Preparing the browser can mean waiting for the first-run download of the fingerprint
     // browser, which takes longer than the plugin waits for this HTTP answer. Give the id back
     // now and open the window as soon as the browser is ready; the status poll reports the rest.
-    run.step = "正在准备浏览器，第一次使用会先下载开源指纹浏览器"
+    run.step = "正在准备浏览器（优先用 Donut Browser 的 Wayfern 内核，没有时第一次使用会先下载开源指纹浏览器）"
     this.launch(run, chosen, profileDir, () => stopped).catch((err: any) => {
       if (run.status !== "failed") Object.assign(run, { status: "failed", error: `打不开浏览器: ${err.message}` })
     })

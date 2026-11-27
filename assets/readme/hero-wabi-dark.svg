@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 560" role="img" aria-label="magpie-muse-web bridges a muse.ai web account into a Magpie provider through a local headless fingerprint browser">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 560" role="img" aria-label="MuseWeb2Magpie bridges a muse.ai web account into a Magpie provider through a local headless fingerprint browser">
   <rect width="1440" height="560" fill="#121316"/>
   <rect x="64" y="64" width="1312" height="432" fill="none" stroke="#3A3B40"/>
   <rect x="104" y="128" width="38" height="3" fill="#C78E5C"/>
   <text x="104" y="176" font-family="ui-monospace, Consolas, monospace" font-size="15" letter-spacing="5" fill="#C78E5C">WEB-ACCOUNT BRIDGE</text>
-  <text x="104" y="254" font-family="Georgia, 'Times New Roman', serif" font-size="62" fill="#ECE9E1">magpie-muse-web</text>
+  <text x="104" y="254" font-family="Georgia, 'Times New Roman', serif" font-size="62" fill="#ECE9E1">MuseWeb2Magpie</text>
   <text x="104" y="316" font-family="Georgia, 'Times New Roman', serif" font-size="34" fill="#A19D93">A muse.ai account, quietly spoken to.</text>
   <text x="104" y="380" font-family="Inter, Segoe UI, sans-serif" font-size="19" fill="#A19D93">Headless fingerprint browser, account scheduling, and calm usage cards.</text>
   <rect x="820" y="118" width="286" height="332" rx="2" fill="#1A1B20" stroke="#3A3B40"/>

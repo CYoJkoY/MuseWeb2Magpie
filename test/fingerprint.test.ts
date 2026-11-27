@@ -7,9 +7,11 @@ import os from "node:os"
 import path from "node:path"
 import {
   APOSTATE_PIN,
+  donutDataRoots,
   ensureFingerprintBrowser,
   extractZip,
   findFingerprintBrowser,
+  findWayfernBrowser,
   fingerprintArgs,
   pickReleaseAsset,
   verifySha256,
@@ -92,6 +94,67 @@ test("a local fingerprint browser is reused without touching the network", async
   const found = findFingerprintBrowser(env, "win32", (p) => p === exe)
   assert.equal(found, exe)
   rmSync(dir, { recursive: true, force: true })
+})
+
+// A Donut Browser install keeps its kernels under <data>/binaries/wayfern/<version>/.
+function wayfernTree(root, version) {
+  const dir = path.join(root, "binaries", "wayfern", version)
+  mkdirSync(dir, { recursive: true })
+  const exe = path.join(dir, "chrome.exe")
+  writeFileSync(exe, "kernel")
+  return exe
+}
+
+test("Donut Browser's Wayfern kernel is reused before Apostate is downloaded", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "mw-fp-donut-"))
+  const scoop = path.join(home, "scoop")
+  const exe = wayfernTree(path.join(scoop, "apps", "donutbrowser", "current", "data"), "156.0.8078.86")
+  const dir = path.join(home, "data")
+  mkdirSync(dir, { recursive: true })
+  const env = {
+    HOME: home,
+    USERPROFILE: home,
+    LOCALAPPDATA: path.join(home, "empty"),
+    APPDATA: path.join(home, "empty"),
+    SCOOP: scoop,
+  }
+  let fetched = 0
+  const picked = await ensureFingerprintBrowser({
+    dir,
+    env,
+    platform: "win32",
+    arch: "x64",
+    fetchImpl: async () => { fetched++; throw new Error("no network") },
+    log: () => {},
+  })
+  assert.equal(fetched, 0)
+  assert.equal(picked.executable, exe)
+  assert.equal(picked.source, "donut")
+  // Wayfern is an ordinary Chromium at the command line: the --fingerprint flags stay off.
+  assert.deepEqual(picked.extraArgs, [])
+  rmSync(home, { recursive: true, force: true })
+})
+
+test("the newest Wayfern kernel wins when Donut keeps several versions", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "mw-fp-wayfern-"))
+  const data = path.join(home, "DonutBrowser")
+  wayfernTree(data, "155.0.8059.31")
+  const newest = wayfernTree(data, "156.0.8078.86")
+  const env = { HOME: home, USERPROFILE: home, LOCALAPPDATA: home }
+  assert.equal(findWayfernBrowser(env, "win32"), newest)
+  assert.equal(donutDataRoots(env, "win32")[0], data)
+  rmSync(home, { recursive: true, force: true })
+})
+
+test("MUSE_WEB_DONUT_BROWSER names a Donut folder or the kernel, and off disables Donut", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "mw-fp-donut-env-"))
+  const data = path.join(home, "donut-data")
+  const exe = wayfernTree(data, "156.0.8078.86")
+  const base = { HOME: home, USERPROFILE: home, LOCALAPPDATA: path.join(home, "empty") }
+  assert.equal(findWayfernBrowser({ ...base, MUSE_WEB_DONUT_BROWSER: data }, "win32"), exe)
+  assert.equal(findWayfernBrowser({ ...base, MUSE_WEB_DONUT_BROWSER: exe }, "win32"), exe)
+  assert.equal(findWayfernBrowser({ ...base, MUSE_WEB_DONUT_BROWSER: "off" }, "win32"), null)
+  rmSync(home, { recursive: true, force: true })
 })
 
 test("a missing fingerprint browser is downloaded, verified and installed", async () => {

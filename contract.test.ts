@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { once } from "node:events"
-import { readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import type { AddressInfo } from "node:net"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 import { MuseWebPlugin } from "./index.ts"
@@ -247,6 +249,97 @@ test("the chosen browser goes to the engine with the sign-in request", async () 
     assert.equal(fx.seen.filter((r) => r.url === "/v1/login").at(-1).body, "")
   } finally {
     await fx.close()
+  }
+})
+
+test("a local engine offers a manual browser path and sends it", async () => {
+  const fake = listen()
+  fake.server.listen(0, "127.0.0.1")
+  await once(fake.server, "listening")
+  const { port } = fake.server.address() as AddressInfo
+  const saved = {
+    engine: process.env.MUSE_WEB_ENGINE,
+    key: process.env.MUSE_WEB_ENGINE_KEY,
+    port: process.env.MUSE_WEB_ENGINE_PORT,
+    bin: process.env.MUSE_WEB_ENGINE_BIN,
+  }
+  // Build the plugin as a local one so it declares the prompts, but keep its engine probes on
+  // the fake server and its binary missing, so nothing is started and nothing real is touched.
+  delete process.env.MUSE_WEB_ENGINE
+  process.env.MUSE_WEB_ENGINE_PORT = String(port)
+  process.env.MUSE_WEB_ENGINE_BIN = "muse-web-test-missing-engine"
+  try {
+    const hooks = await MuseWebPlugin({})
+    const oauth: any = hooks.auth.methods.find((m) => m.type === "oauth")
+    const [pick, typed] = oauth.prompts
+    assert.equal(pick.type, "select")
+    assert.deepEqual(pick.options.at(-1), { label: "手动填写浏览器路径…", value: "__manual__" })
+    assert.equal(typed.type, "text")
+    assert.deepEqual(typed.when, { key: "browser", value: "__manual__", op: "eq" })
+    // The sign-in itself goes to the engine once the local plugin has asked its questions.
+    process.env.MUSE_WEB_ENGINE = `http://127.0.0.1:${port}`
+    process.env.MUSE_WEB_ENGINE_KEY = "engine-test-key"
+    // The typed path is checked on this machine before sign-in starts, so it has to exist here.
+    const manualDir = mkdtempSync(path.join(os.tmpdir(), "mw-contract-manual-"))
+    const chosen = path.join(manualDir, "chrome.exe")
+    writeFileSync(chosen, "")
+    const started = await oauth.authorize({ browser: "__manual__", browserPath: chosen })
+    assert.equal(started.url, "http://127.0.0.1:18611/login/login-test")
+    assert.deepEqual(JSON.parse(fake.seen.find((r) => r.url === "/v1/login").body), { browser: chosen })
+    // A browser picked from the scan stays in charge; a leftover typed path does not override it.
+    const scanned = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    await oauth.authorize({ browser: scanned, browserPath: chosen })
+    assert.deepEqual(JSON.parse(fake.seen.filter((r) => r.url === "/v1/login").at(-1).body), { browser: scanned })
+    // The sentinel is never sent as a path, and a missing path says so instead of using the default.
+    await assert.rejects(oauth.authorize({ browser: "__manual__" }), /手动填写浏览器路径/)
+    await assert.rejects(oauth.authorize({ browser: "__manual__", browserPath: path.join(manualDir, "missing.exe") }), /浏览器路径不存在/)
+    rmSync(manualDir, { recursive: true, force: true })
+  } finally {
+    const restore: Array<[string, string | undefined]> = [
+      ["MUSE_WEB_ENGINE", saved.engine],
+      ["MUSE_WEB_ENGINE_KEY", saved.key],
+      ["MUSE_WEB_ENGINE_PORT", saved.port],
+      ["MUSE_WEB_ENGINE_BIN", saved.bin],
+    ]
+    for (const [name, value] of restore) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    await new Promise<void>((resolve, reject) => fake.server.close((err) => err ? reject(err) : resolve()))
+  }
+})
+
+test("Donut Browser's Wayfern kernel is the first browser offered at sign-in", async () => {
+  const fake = listen()
+  fake.server.listen(0, "127.0.0.1")
+  await once(fake.server, "listening")
+  const { port } = fake.server.address() as AddressInfo
+  const home = mkdtempSync(path.join(os.tmpdir(), "mw-contract-donut-"))
+  const scoop = path.join(home, "scoop")
+  const kernel = path.join(scoop, "apps", "donutbrowser", "current", "data", "binaries", "wayfern", "156.0.8078.86", "chrome.exe")
+  mkdirSync(path.dirname(kernel), { recursive: true })
+  writeFileSync(kernel, "kernel")
+  const names = ["SCOOP", "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "MUSE_WEB_ENGINE", "MUSE_WEB_ENGINE_KEY", "MUSE_WEB_ENGINE_PORT", "MUSE_WEB_ENGINE_BIN", "MUSE_WEB_DONUT_BROWSER"]
+  const saved = names.map((name) => [name, process.env[name]] as const)
+  try {
+    // A temp home keeps the browser scan on the fake Donut install; the engine stays on the fake
+    // server with a missing binary, so nothing real is started or touched.
+    for (const name of ["HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) process.env[name] = home
+    process.env.SCOOP = scoop
+    delete process.env.MUSE_WEB_DONUT_BROWSER
+    delete process.env.MUSE_WEB_ENGINE
+    process.env.MUSE_WEB_ENGINE_PORT = String(port)
+    process.env.MUSE_WEB_ENGINE_BIN = "muse-web-test-missing-engine"
+    const hooks = await MuseWebPlugin({})
+    const oauth: any = hooks.auth.methods.find((m) => m.type === "oauth")
+    assert.deepEqual(oauth.prompts[0].options[0], { label: "Donut Browser（Wayfern 内核）", value: kernel })
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+    await new Promise<void>((resolve, reject) => fake.server.close((err) => err ? reject(err) : resolve()))
   }
 })
 

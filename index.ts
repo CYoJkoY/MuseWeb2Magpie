@@ -4,12 +4,14 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { dataDir, enginePort } from "./engine/paths.ts"
 import { browserOptions } from "./engine/browser.ts"
-import { findFingerprintBrowser } from "./engine/fingerprint.ts"
+import { findFingerprintBrowser, findWayfernBrowser, isWayfernBrowser } from "./engine/fingerprint.ts"
 import { anyFetch } from "./engine/local-fetch.ts"
 import { VERSION } from "./engine/version.ts"
 
 const PROVIDER = "muse-web"
 const MODEL = "muse-spark"
+// A select value, never a path: the sign-in prompt offers it when the scan misses a browser.
+const MANUAL_BROWSER = "__manual__"
 const CONTROL_TIMEOUT_MS = 10_000
 const ENGINE_START_MS = 20_000
 // the engine's 15 minutes to sign in, then the test message it sends to the new account
@@ -168,13 +170,25 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
   }
 
   async function browserLogin(inputs: any = {}) {
-    const browser = typeof inputs?.browser === "string" ? inputs.browser.trim() : ""
+    const typed = typeof inputs?.browserPath === "string" ? inputs.browserPath.trim() : ""
+    const picked = typeof inputs?.browser === "string" ? inputs.browser.trim() : ""
+    if (picked === MANUAL_BROWSER && !typed) {
+      throw new Error("选了「手动填写浏览器路径」，但没有填路径；请填浏览器可执行文件的完整路径")
+    }
+    // A typed path is this machine's own, so say now that it is wrong instead of letting the
+    // engine's first status poll say it a couple of seconds later.
+    if (picked === MANUAL_BROWSER && !existsSync(typed)) {
+      throw new Error(`浏览器路径不存在：${typed}；请填可执行文件的完整路径，例如 chrome.exe`)
+    }
+    // A browser picked from the scan is what the person meant; the typed path only stands in
+    // when the scan missed it and there is nothing else to go on.
+    const browser = picked === MANUAL_BROWSER ? typed : picked || typed
     const res = await control("/v1/login", "POST", "", browser ? { browser } : undefined)
     if (!res?.ok) throw new Error(res ? `muse-web 引擎没能开始登录（HTTP ${res.status}）` : "muse-web 引擎没有启动；日志在数据目录的 engine.log")
     const { id, url } = await res.json() as any
     return {
       url,
-      instructions: "在弹出的浏览器窗口里登录 muse.ai。第一次使用会先下载开源指纹浏览器 Apostate，窗口会晚一点出现。登录后窗口自动关闭，引擎再发一条测试消息，账号能回答才算登录成功。",
+      instructions: "在弹出的浏览器窗口里登录 muse.ai。优先复用本机 Donut Browser 的 Wayfern 内核；没有时会下载开源指纹浏览器 Apostate，窗口会晚一点出现。登录后窗口自动关闭，引擎再发一条测试消息，账号能回答才算登录成功。",
       method: "auto",
       async callback() {
         const end = Date.now() + LOGIN_LIMIT_MS
@@ -206,15 +220,26 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
   if (!external()) ensureEngine().catch(() => {})
 
   // An engine someone else runs may be on another machine, so its browsers are not ours to list.
-  // A fingerprint browser already on this machine is offered first: the engine's own default is
-  // the bundled/open-source Apostate, so a person picking here usually means "use this copy".
+  // Donut Browser's Wayfern kernel is listed first because the engine picks it by itself; then a
+  // local Apostate, then the plain Chromium installs the scan can see.
   function browserChoices() {
     const out = []
-    const fingerprint = findFingerprintBrowser(process.env, process.platform, existsSync, dataDir())
-    if (fingerprint) out.push({ label: "Apostate 指纹浏览器", value: fingerprint })
-    for (const option of browserOptions()) {
-      if (option.value && option.value !== fingerprint) out.push(option)
+    const seen = new Set<string>()
+    const add = (label: string, value: string) => {
+      const key = value ? path.resolve(value).toLowerCase() : ""
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      out.push({ label, value })
     }
+    add("Donut Browser（Wayfern 内核）", findWayfernBrowser(process.env, process.platform, existsSync))
+    const fingerprint = findFingerprintBrowser(process.env, process.platform, existsSync, dataDir())
+    add(isWayfernBrowser(fingerprint) ? "Donut Browser（Wayfern 内核）" : "Apostate 指纹浏览器", fingerprint)
+    for (const option of browserOptions()) {
+      add(option.label, option.value)
+    }
+    // Portable installs and unusual folders are exactly what the scan misses, so the list
+    // always ends with a way to name the executable by hand.
+    out.push({ label: "手动填写浏览器路径…", value: MANUAL_BROWSER })
     return out
   }
   const browsers = external() ? [] : browserChoices()
@@ -256,7 +281,16 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
           type: "oauth",
           label: "muse.ai（浏览器登录）",
           // Only a local engine can use a path from this machine; an external one keeps its own default.
-          ...(browsers.length ? { prompts: [{ type: "select", key: "browser", message: "用哪个浏览器登录 muse.ai？（开源指纹浏览器 Apostate 在前，其余是本机已装的 Chromium 系）", options: browsers }] } : {}),
+          ...(browsers.length ? { prompts: [
+            { type: "select", key: "browser", message: "用哪个浏览器登录 muse.ai？（最前是 Donut Browser 的 Wayfern 内核，其次是开源指纹浏览器 Apostate，其余是本机已装的 Chromium 系；没扫到时选最后一项手动填写路径）", options: browsers },
+            {
+              type: "text",
+              key: "browserPath",
+              message: "浏览器可执行文件的完整路径（Chrome、Edge、Chromium、Brave 都可以）",
+              placeholder: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+              when: { key: "browser", value: MANUAL_BROWSER, op: "eq" },
+            },
+          ] } : {}),
           authorize: browserLogin,
         },
         { type: "api", label: "引擎账号 ID（高级：配合自己运行的引擎）", placeholder: "muse-xxxxxxxxxxxx" },

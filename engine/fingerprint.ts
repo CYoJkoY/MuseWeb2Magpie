@@ -56,6 +56,96 @@ export function isFingerprintBrowser(executable: unknown): boolean {
   return /apostate/i.test(String(executable || ""))
 }
 
+// Donut Browser (donutbrowser/donutbrowser, AGPL-3.0) ships its own Chromium fork, Wayfern, under
+// <data>/binaries/wayfern/<version>/. At the command line Wayfern is an ordinary Chromium, so it
+// runs with the same flags as Chrome: no fingerprint flags, no Donut protocol, no paid token.
+// Reusing it means the browser someone already uses every day is preferred over a second download.
+export const DONUT_ENV = "MUSE_WEB_DONUT_BROWSER"
+
+export function isWayfernBrowser(executable: unknown): boolean {
+  return /[\\/]wayfern[\\/]/i.test(String(executable || ""))
+}
+
+const KERNEL_NAME = /^(chrome|chromium)(\.exe)?$/i
+
+// Version folders compare as numbers, so "156.0.8078.86" beats "155.0.8059.31".
+function compareVersions(a: string, b: string): number {
+  const left = String(a).split(/[.\-+_]/).map((part) => Number(part) || 0)
+  const right = String(b).split(/[.\-+_]/).map((part) => Number(part) || 0)
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] || 0) - (right[i] || 0)
+    if (diff) return diff
+  }
+  return 0
+}
+
+// The newest Wayfern kernel under <root>/binaries/wayfern, or null when Donut has not fetched one.
+export function wayfernIn(root: string, platform: string = process.platform): string | null {
+  const binaries = path.join(String(root || ""), "binaries", "wayfern")
+  let versions: string[]
+  try { versions = readdirSync(binaries) } catch { return null }
+  for (const version of versions.sort(compareVersions).reverse()) {
+    const found = findExecutable(path.join(binaries, version), platform)
+    if (found) return found
+  }
+  return null
+}
+
+// Where Donut Browser keeps its data, in the order Donut resolves it: the two env overrides, the
+// per-user data folder, then a portable/Scoop install (which keeps its data beside the exe).
+export function donutDataRoots(env: NodeJS.ProcessEnv = process.env, platform: string = process.platform): string[] {
+  const out: string[] = []
+  const add = (value: unknown) => {
+    const dir = String(value || "").trim()
+    if (dir) out.push(dir)
+  }
+  add(env.DONUTBROWSER_DATA_DIR)
+  const root = String(env.DONUTBROWSER_DATA_ROOT || "").trim()
+  if (root) add(path.join(root, "data"))
+  const home = env.HOME || env.USERPROFILE || os.homedir()
+  if (platform === "win32") {
+    if (env.LOCALAPPDATA) add(path.join(env.LOCALAPPDATA, "DonutBrowser"))
+  } else if (platform === "darwin") {
+    add(path.join(home, "Library", "Application Support", "DonutBrowser"))
+  } else {
+    add(path.join(env.XDG_DATA_HOME || path.join(home, ".local", "share"), "DonutBrowser"))
+  }
+  const scoop: string[] = []
+  for (const base of [env.SCOOP, env.SCOOP_GLOBAL]) if (base) scoop.push(base)
+  if (env.USERPROFILE) scoop.push(path.join(env.USERPROFILE, "scoop"))
+  for (const base of scoop) add(path.join(base, "apps", "donutbrowser", "current"))
+  return [...new Set(out)]
+}
+
+// Every place a Wayfern kernel could be: the MUSE_WEB_DONUT_BROWSER override (a kernel itself or a
+// Donut folder), then the folders Donut uses on its own. A folder is tried both as the data root
+// and as the install folder that holds it.
+export function wayfernCandidates(env: NodeJS.ProcessEnv = process.env, platform: string = process.platform): string[] {
+  const out: string[] = []
+  const add = (file: string | null) => {
+    if (file && !out.includes(file)) out.push(file)
+  }
+  const own = String(env[DONUT_ENV] || "").trim()
+  // "off" means this person does not want Donut used at all, not just "use the default folders".
+  if (DISABLED.has(own.toLowerCase())) return []
+  if (own) {
+    if (KERNEL_NAME.test(path.basename(own))) add(own)
+    else {
+      add(wayfernIn(own, platform))
+      add(wayfernIn(path.join(own, "data"), platform))
+    }
+  }
+  for (const root of donutDataRoots(env, platform)) {
+    add(wayfernIn(root, platform))
+    add(wayfernIn(path.join(root, "data"), platform))
+  }
+  return out
+}
+
+export function findWayfernBrowser(env: NodeJS.ProcessEnv = process.env, platform: string = process.platform, exists: (p: string) => boolean = fsExists): string | null {
+  return wayfernCandidates(env, platform).find((p) => p && exists(p)) ?? null
+}
+
 // A persona seed that stays the same across restarts, so the browser keeps one machine identity.
 // Apostate's seed is an integer; a random 31-bit value is stable enough and hard to fingerprint.
 export function stableFingerprintSeed(dir: string): string {
@@ -411,9 +501,9 @@ async function waitForInstall(root: string, exists: (p: string) => boolean, plat
   return null
 }
 
-// The engine's browser resolver: reuse a local Apostate if there is one, otherwise download and
-// install the pinned release, caching it under <dir>/browsers/apostate. Returns
-// {executable, extraArgs, source, version} or null (caller falls back to a system Chrome/Edge).
+// The engine's browser resolver: a configured path, then Donut Browser's Wayfern kernel, then a
+// local Apostate, otherwise download and install the pinned release under <dir>/browsers/apostate.
+// Returns {executable, extraArgs, source, version} or null (caller falls back to a system Chrome).
 export interface EnsureOptions {
   dir?: string
   env?: NodeJS.ProcessEnv
@@ -456,7 +546,17 @@ export async function ensureFingerprintBrowser({
     log(`指纹浏览器：MUSE_WEB_FINGERPRINT_BROWSER 指向的文件不存在：${own}`)
   }
 
-  // 2. A copy already on this machine.
+  // 2. Donut Browser's own Wayfern kernel, when that is the browser someone actually uses. At the
+  // command line it is an ordinary Chromium, so it gets no fingerprint flags.
+  if (!DISABLED.has(String(env[DONUT_ENV] || "").trim().toLowerCase())) {
+    const wayfern = findWayfernBrowser(env, platform, exists)
+    if (wayfern) {
+      log(`指纹浏览器：使用 Donut Browser 的 Wayfern 内核 ${wayfern}`)
+      return { executable: wayfern, extraArgs: [], source: "donut", version: "" }
+    }
+  }
+
+  // 3. A copy already on this machine.
   const local = installedFingerprintExecutable({ env, platform, exists, dir })
   if (local) {
     log(`指纹浏览器：复用本机已有的 ${local}`)
@@ -465,7 +565,7 @@ export async function ensureFingerprintBrowser({
 
   if (!allowDownload) return null
 
-  // 3. Download and install once.
+  // 4. Download and install once.
   const version = String(env.MUSE_WEB_FINGERPRINT_VERSION || APOSTATE_PIN.version).replace(/^v/, "") || APOSTATE_PIN.version
   const installRoot = path.join(dir, "browsers", "apostate")
   const key = assetKey(platform, arch)
