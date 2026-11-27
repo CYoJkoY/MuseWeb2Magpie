@@ -3,8 +3,8 @@
 ## 0.12.4 · 2026-11-28
 
 - 修复：`test` 工作流会偶发在单个平台上失败，同一个提交在另外两个平台是绿的。两次失败都是 `a browser left in the legacy profile cannot block a new engine`：`v0.12.3` 的 windows-latest 报 `error: 'browser did not open its debugging port: timeout'`（33.3 s），`main` 的 ubuntu-latest 报 `error: 'browser did not open its debugging port: The operation was aborted'`。两次都在这个测试的第一次 `launchBrowser()` 上，而那也是整个作业里第一次真正启动浏览器（`--test-concurrency=1`，这个文件排在 `engine.test.ts` 之前），本地同一条测试 1.7 s。`launchBrowser()` 的 `waitMs` 原本是 30 s：Windows 上 30 s 里始终没有读到可用的 `DevToolsActivePort`（进程还活着，否则会报退出码与 stderr），Ubuntu 上文件有了但每次 1.5 s 的 `/json/version` 探测都被中止。也就是说 30 s 的预算被冷启动吃干了，而两个平台失败的样子还被同一句含糊的话盖住。现在默认预算改为 `START_BUDGET_MS`（60 s，`engine/browser.ts`），`MUSE_WEB_START_MS` 给更慢的机器继续调长；每次探测只用「预算里剩下的时间」，所以 `waitMs` 终于是它自称的那个上限（原先 30 s 预算实际会拖到 33 s）。
-- 变更：启动超时的报错不再只说「timeout」，而是把能分开这几种情形的三件事写进去：等了多久、`DevToolsActivePort` 是还没有还是里面写着什么（最多 200 字节）、最后一次探测的回答、以及浏览器自己最后三行 stderr。`engine/browser.ts` 新增导出 `startTimeout()`，`startFailure()` 与它共用同一份 stderr 收尾，测试也不必启动浏览器就能钉住这条消息。
-- 测试：新增 `test/browser-start.test.ts` 三条：超时消息的矩阵（文件还没出现、文件在但内容不是端口、stderr 只留最后三行）、预算规则（默认值、`MUSE_WEB_START_MS`、`0`/空/`soon`/`Infinity` 等无效值一律回到默认）、以及一条只在 POSIX 上跑的真实进程测试——一个忽略参数、活着却从不写端口文件的假浏览器，要在自己的预算里被放弃，并把它的 stderr 带进消息。`test/browser-recovery.test.ts` 里那条真实浏览器测试的期限随预算从 120 s 提到 180 s。
+- 变更：启动超时的报错不再只说「timeout」，而是把能分开这几种情形的三件事写进去：等了多久、`DevToolsActivePort` 是还没有还是里面写着什么（最多 200 字节）、最后一次探测的回答、以及浏览器自己最后三行 stderr。`engine/browser.ts` 新增导出 `startTimeout()`，`startFailure()` 与它共用同一份 stderr 收尾，测试也不必启动浏览器就能钉住这条消息。这条消息在关闭临时 profile 之前就构造好：关闭会删掉那个目录，顺序反了就会把「文件在、内容不对」报成「文件从未出现」，而这恰恰是最需要区分的一种。
+- 测试：新增 `test/browser-start.test.ts` 三条：超时消息的矩阵（文件还没出现、文件在但内容不是端口、stderr 只留最后三行）、预算规则（默认值、`MUSE_WEB_START_MS`、`0`/空/`soon`/`Infinity` 等无效值一律回到默认）、以及一条只在 POSIX 上跑的真实进程测试——一个忽略参数、写下一份用不了的 `DevToolsActivePort`、然后一直活着的假浏览器，要在自己的预算里被放弃，并把文件内容与它自己的 stderr 一起带进消息（这条也钉住了上面那个「先构造消息、再关闭」的顺序）。`test/browser-recovery.test.ts` 里那条真实浏览器测试的期限随预算从 120 s 提到 180 s。
 - 说明：这条失败是环境抖动（同一提交在别的平台是绿的），所以引擎这边该做的是「等得够久」加「失败时说清看到了什么」，而不是在测试里加一次重试——重试只会把下一次真故障也一起吞掉。
 
 ## 0.12.3 · 2026-11-27
