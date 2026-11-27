@@ -6,7 +6,7 @@ import { findBrowser } from "./browser.ts"
 import { ensureFingerprintBrowser } from "./fingerprint.ts"
 import { Logins } from "./login.ts"
 import { AuthError, Muse, PromptTooLongError, QuotaError, redact, renewSession } from "./muse.ts"
-import { proxiedFetch, resolveProxy } from "./net.ts"
+import { proxiedFetch, proxyHasCredentials, resolveProxy } from "./net.ts"
 import { dataDir } from "./paths.ts"
 import { buildPrompt, PromptError } from "./prompt.ts"
 import { siteOrDefault, siteProblem } from "./site.ts"
@@ -86,6 +86,10 @@ const siteTrouble = siteProblem(env.MUSE_WEB_SITE)
 const site = siteOrDefault(env.MUSE_WEB_SITE)
 if (siteTrouble) log(`muse-web: ${siteTrouble}`)
 const proxy = resolveProxy(env)
+// The browser gets the proxy without its credentials (they would only sit in a command line any
+// local user can read, and Chrome ignores them there). Say so once, so a proxy that needs a
+// password is not silently a proxy that refuses the browser's requests.
+if (proxyHasCredentials(proxy)) log("muse-web: 代理地址带的用户名密码只用于引擎自己的请求；浏览器的 --proxy-server 里不带凭据")
 const fetchImpl = proxiedFetch(proxy)
 const fallbackExecutable = findBrowser(env)
 const mode = ["headless", "hidden", "show"].includes(env.MUSE_WEB_BROWSER || "") ? env.MUSE_WEB_BROWSER : "headless"

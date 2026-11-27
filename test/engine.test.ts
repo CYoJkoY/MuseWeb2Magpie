@@ -13,7 +13,7 @@ import { noDesktop } from "../engine/login.ts"
 import { cookieSpecs, ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, usageCard } from "../engine/muse.ts"
 import { parseToolCalls, toolChoiceRequired, toolChoiceSatisfied, toolsPrompt } from "../engine/tools.ts"
 import { VERSION } from "../engine/version.ts"
-import { parseScutil, parseWinProxy, resolveProxy } from "../engine/net.ts"
+import { parseScutil, parseWinProxy, proxyForBrowser, proxyHasCredentials, resolveProxy } from "../engine/net.ts"
 import { parentAlive, watchParent } from "../engine/parent.ts"
 import { dataDir } from "../engine/paths.ts"
 import { buildPrompt } from "../engine/prompt.ts"
@@ -232,6 +232,28 @@ describe("pure parts", () => {
     const hidden = browserArgs({ ...base, headless: false, hidden: true, proxy: "" })
     assert.ok(hidden.includes("--window-position=-32000,-32000") && !hidden.some((a) => a.startsWith("--headless")))
     assert.ok(hidden.includes("--use-mock-keychain") && hidden.includes("--password-store=basic"))
+  })
+
+  test("proxy credentials never reach the browser's command line", () => {
+    const base = { port: 1, profileDir: "/p" }
+    // Chrome parses --proxy-server as scheme/host/port and drops user:password anyway, so the only
+    // thing credentials in that argument do is sit in a process list every local user can read.
+    const secret = "http://user:pw123@proxy.example:8080"
+    const args = browserArgs({ ...base, headless: true, proxy: secret })
+    assert.ok(args.includes("--proxy-server=http://proxy.example:8080"))
+    assert.ok(!args.some((a) => a.includes("hunter2") || a.includes("user@")))
+    // The engine's own requests keep the full URL, so an authenticated proxy still works there.
+    assert.equal(proxyHasCredentials(secret), true)
+    assert.equal(proxyHasCredentials("http://proxy.example:8080"), false)
+    assert.equal(proxyHasCredentials("direct"), false)
+    assert.equal(proxyForBrowser(secret), "http://proxy.example:8080")
+    assert.equal(proxyForBrowser("socks5://u:p@[::1]:1080"), "socks5://[::1]:1080")
+    assert.equal(proxyForBrowser("127.0.0.1:7897/"), "http://127.0.0.1:7897")
+    assert.equal(proxyForBrowser("direct"), "direct")
+    assert.equal(proxyForBrowser(""), "")
+    // A scheme Chrome cannot use is passed through unchanged rather than silently rewritten into
+    // something else; the browser then reports the proxy it cannot use.
+    assert.equal(proxyForBrowser("ftp://h:1"), "ftp://h:1")
   })
 
   test("a Linux session without a desktop cannot open the sign-in window", () => {

@@ -127,6 +127,14 @@
     本身。名字被改写后不再与固定版本的 sha256 对应，所以这次下载必须自带 `.manifest.json`
     的哈希，否则校验不过、退回系统 Chromium。测试见 `test/fingerprint.test.ts`。设计见
     [`docs/adr/0011-release-file-name.md`](docs/adr/0011-release-file-name.md)。
+20. **代理里的凭据不进子进程命令行。** 代理地址可能带 `user:password@`，而
+    `--proxy-server=<整条 URL>` 是浏览器进程的参数：在 macOS 和 Linux 上，任何本机用户都能用
+    `ps` 读到别人的命令行。Chrome 解析这个参数时只取 scheme、host、port，用户名密码本来就会
+    被丢掉——所以它们出现在那里只有坏处。`engine/net.ts` 的 `proxyForBrowser()` 在拼参数前
+    去掉 userinfo（保留 scheme://host:port，其他 scheme 原样通过，交给浏览器报错）；引擎自己的
+    请求照旧用完整的 URL（`proxiedFetch`），需要认证的代理仍然可用。`proxyHasCredentials()`
+    让驱动在启动日志里说明一次，免得有人以为浏览器也在用那组凭据。测试见
+    `test/engine.test.ts`。设计见 [`docs/adr/0012-proxy-credentials-off-argv.md`](docs/adr/0012-proxy-credentials-off-argv.md)。
 
 ## 已知残留风险
 

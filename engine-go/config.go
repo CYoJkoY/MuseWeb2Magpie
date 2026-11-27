@@ -192,19 +192,6 @@ func redact(text string) string {
 	return redactCookie.ReplaceAllString(out, "$1=***")
 }
 
-// masked hides the credentials a proxy URL may carry.
-func masked(url string) string {
-	if strings.TrimSpace(url) == "" {
-		return ""
-	}
-	if at := strings.Index(url, "@"); at > 0 {
-		if scheme := strings.Index(url, "//"); scheme >= 0 && scheme+2 <= at {
-			return url[:scheme+2] + "***@" + url[at+1:]
-		}
-	}
-	return url
-}
-
 func timeString() string {
 	return time.Now().Format("15:04:05")
 }

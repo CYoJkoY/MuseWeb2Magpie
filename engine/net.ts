@@ -67,3 +67,35 @@ export function proxiedFetch(proxy: string, base: typeof fetch = globalThis.fetc
   // Bun takes the proxy per request; the DOM RequestInit type has no such field.
   return (url, init = {}) => base(url, { ...init, proxy } as RequestInit)
 }
+
+const PROXY_SCHEMES = new Set(["http:", "https:", "socks4:", "socks4a:", "socks5:", "socks5h:"])
+
+// proxyForBrowser is what goes into --proxy-server. Chrome parses that argument as scheme, host
+// and port and drops any user:password on the way in, so credentials there buy nothing — they only
+// sit in the process command line, where any local user can read them (ps on macOS and Linux shows
+// every user's arguments). The engine's own requests keep the full URL, credentials included.
+export function proxyForBrowser(value: unknown): string {
+  const text = String(value ?? "").trim().replace(/\/+$/, "")
+  if (!text || text === "direct") return text
+  const withScheme = /^[a-z][\w+.-]*:\/\//i.test(text) ? text : `http://${text}`
+  try {
+    const url = new URL(withScheme)
+    if (!PROXY_SCHEMES.has(url.protocol)) return text
+    return `${url.protocol}//${url.host}`
+  } catch {
+    return text
+  }
+}
+
+// proxyHasCredentials says whether the proxy URL carries a user name or password, so the engine
+// can tell a person once that the browser will not use them.
+export function proxyHasCredentials(value: unknown): boolean {
+  const text = String(value ?? "").trim()
+  if (!text || text === "direct") return false
+  try {
+    const url = new URL(/^[a-z][\w+.-]*:\/\//i.test(text) ? text : `http://${text}`)
+    return Boolean(url.username || url.password)
+  } catch {
+    return false
+  }
+}

@@ -5,6 +5,7 @@ import { rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import path from "node:path"
 import { CDP, httpJSON } from "./cdp.ts"
+import { proxyForBrowser } from "./net.ts"
 
 export function browserCandidates(platform = process.platform, env: NodeJS.ProcessEnv = process.env): string[] {
   if (platform === "darwin") {
@@ -159,8 +160,10 @@ export function browserArgs({ port, profileDir, headless, hidden = false, proxy,
     if (hidden) args.push("--window-position=-32000,-32000")
   }
   if (proxy === "direct") args.push("--no-proxy-server")
-  // Chrome rejects a proxy with a path: --proxy-server=http://h:1/ ends in ERR_NO_SUPPORTED_PROXIES.
-  else if (proxy) args.push(`--proxy-server=${String(proxy).replace(/\/+$/, "")}`)
+  // Chrome rejects a proxy with a path (ERR_NO_SUPPORTED_PROXIES) and drops credentials in this
+  // argument anyway, so proxyForBrowser trims the slash and leaves the user:password out of a
+  // command line that every local user can read.
+  else if (proxy) args.push(`--proxy-server=${proxyForBrowser(proxy)}`)
   if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) args.push("--no-sandbox")
   for (const arg of extraArgs || []) if (arg) args.push(String(arg))
   args.push(url)
