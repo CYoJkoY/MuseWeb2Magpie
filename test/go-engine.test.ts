@@ -112,7 +112,10 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
   })
 
   test("serves health, models, accounts, and rejects a bad key", async () => {
-    const health = await jsonOf(await fetch(`${base}/v1/health`))
+    const healthRes = await fetch(`${base}/v1/health`)
+    assert.equal(healthRes.headers.get("x-content-type-options"), "nosniff")
+    assert.equal(healthRes.headers.get("cache-control"), "no-store")
+    const health = await jsonOf(healthRes)
     assert.equal(health.status, 200)
     assert.equal(health.body.engine, "muse-web")
     assert.equal(health.body.version, "0.11.0")
@@ -233,6 +236,11 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
     assert.equal(state.body.handle, "good-account")
     const page = await fetch(`${base}/login/fake-login`)
     assert.equal(page.status, 200)
+    assert.equal(page.headers.get("cache-control"), "no-store")
+    assert.equal(page.headers.get("x-content-type-options"), "nosniff")
+    assert.equal(page.headers.get("x-frame-options"), "DENY")
+    assert.equal(page.headers.get("referrer-policy"), "no-referrer")
+    assert.match(page.headers.get("content-security-policy") || "", /default-src 'none'/)
     assert.match(await page.text(), /登录完成/)
   })
 

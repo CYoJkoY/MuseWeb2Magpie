@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 安全：引擎浏览器不再带 `--remote-allow-origins=*`。DevTools 仍然只绑 `127.0.0.1` 的随机端口，但浏览器会拒绝带 `Origin` 头的握手，所以账号资料目录里加载的网页再也连不上 CDP——控制不了浏览器，也读不到 muse.ai 会话。引擎自己的客户端不发 `Origin`，照常连接；单测守住这条参数，真实浏览器测试跑通整条链路，Wayfern 内核上的冒烟验证里裸握手能连、带 `Origin: http://evil.test` 的握手回 403。
+- 安全：所有响应统一带 `x-content-type-options: nosniff`，没有自己指定缓存策略的响应默认 `cache-control: no-store`（SSE 流保留 `no-cache`）；登录进度页 `/login/<id>` 另加 `content-security-policy: default-src 'none'; style-src 'unsafe-inline'; …`、`x-frame-options: DENY` 和 `referrer-policy: no-referrer`。
+- 新增：`SECURITY.md` 写清信任边界、十条必须保持的不变量（只监听回环、Bearer 常量时间比较、目录 0700 / 文件 0600 与原子写、日志脱敏、DevTools 不对网页开放、8 MB 请求体上限、`nosniff` / `no-store`、登录页最小权限、下载校验与防解压穿越、不复用日常浏览器资料）以及已知残留风险；`docs/adr/0003` 记录这次取舍，README 的安全边界一节链接过去。
 - 变更：文档与资源里的项目名统一为 `MuseWeb2Magpie`（仓库名）——README 标题、概述、方案对比、架构图、SVG 图里的文字以及 docker 测试镜像名原来写的是旧名 `magpie-muse-web`。安装命令收敛为 `magpie plugin add github:CYoJkoY/MuseWeb2Magpie`，并注明 npm 上的 `magpie-muse-web` 是旧版本、不再随仓库更新。包名仍是 `magpie-muse-web` / `magpie-muse-web-connector`，Magpie 的安装、升级和已装插件的 id 都不受影响。
 - 新增：登录前选择浏览器的列表末尾多了「手动填写浏览器路径…」。选了它并填上浏览器可执行文件的完整路径，就能用便携版、绿色版或装在别的盘、自动扫描扫不到的浏览器登录；从列表里选中的浏览器优先于残留的手填路径，只选不填或路径不存在都会在开始登录前直接报错。
 - 新增：优先使用本机 Donut Browser 自带的 Wayfern 内核。引擎自动查找 `%LOCALAPPDATA%\DonutBrowser`、`DONUTBROWSER_DATA_DIR` / `DONUTBROWSER_DATA_ROOT` 指到的目录，以及 Scoop 安装的 `apps\donutbrowser\current\data`，取 `binaries\wayfern` 下版本最高的内核。Wayfern 在命令行上就是普通 Chromium，按 Chromium 启动，不加 `--fingerprint` 参数，也不读写 Donut 自己的账号数据。`MUSE_WEB_DONUT_BROWSER` 可以指向 Donut 的 data 目录或内核文件，设为 `0` 时跳过 Donut、只用 Apostate。

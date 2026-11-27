@@ -75,9 +75,17 @@ func newResponse(w http.ResponseWriter) *response {
 func (r *response) header(status int, contentType string, extra map[string]string) {
 	r.status = status
 	r.wrote = true
-	r.w.Header().Set("content-type", contentType)
+	h := r.w.Header()
+	h.Set("content-type", contentType)
+	// Answers here carry account handles, usage numbers and a stream of live replies. Never let a
+	// browser guess the type, and never let anything cache them; callers may pick a stricter
+	// cache-control (the SSE stream keeps its own no-cache).
+	h.Set("x-content-type-options", "nosniff")
+	if _, set := extra["cache-control"]; !set {
+		h.Set("cache-control", "no-store")
+	}
 	for name, value := range extra {
-		r.w.Header().Set(name, value)
+		h.Set(name, value)
 	}
 	r.w.WriteHeader(status)
 }
@@ -414,7 +422,15 @@ func (e *engine) route(res *response, r *http.Request, m *meta) error {
 			if err != nil {
 				state = nil
 			}
-			res.header(200, "text/html; charset=utf-8", map[string]string{"cache-control": "no-store"})
+			// The progress page is opened by a person in their own browser, driven by a URL that
+			// carries a login id: keep it out of frames, out of caches and out of any third-party
+			// request. It needs no script at all, only its own inline styles.
+			res.header(200, "text/html; charset=utf-8", map[string]string{
+				"cache-control":           "no-store",
+				"content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+				"x-frame-options":         "DENY",
+				"referrer-policy":         "no-referrer",
+			})
 			_, _ = io.WriteString(res.w, loginPage(state))
 			return nil
 		}
