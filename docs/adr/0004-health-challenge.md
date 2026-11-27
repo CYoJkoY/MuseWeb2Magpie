@@ -1,8 +1,10 @@
 # ADR 0004: A health challenge that proves the port before it gets the key
 
+> Note (`0.12.0`): the engine is TypeScript now; the `engine-go/*` paths below name the pre-`0.12.0` Go engine. See [ADR 0016](0016-typescript-engine.md).
+
 ## Status
 
-Accepted for the release after `0.11.0` (see `CHANGELOG.md`, "未发布").
+Accepted for `0.12.0`.
 
 ## Context
 

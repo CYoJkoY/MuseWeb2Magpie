@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs"
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import os from "node:os"
 import path from "node:path"
@@ -17,13 +17,37 @@ export function enginePort(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT
 }
 
+// Windows refuses the replace while something else holds the destination for a moment -- a virus
+// scanner opening the file a sign-in just wrote, the search indexer, a backup agent. The same
+// rename lands a few milliseconds later, so a transient refusal is retried instead of turning a
+// successful sign-in into an error. Every other failure, and a refusal that outlasts the retries,
+// is the caller's to see.
+function replaceFile(tmp: string, file: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, file)
+      return
+    } catch (err: any) {
+      const code = err?.code
+      const transient = code === "EPERM" || code === "EACCES" || code === "EBUSY"
+      if (!transient || attempt >= 5) throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1))
+    }
+  }
+}
+
 // Owner-only where the platform has modes; Windows keeps the user profile's own ACL.
 export function writePrivate(file: string, contents: string) {
   mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
   writeFileSync(tmp, contents, { mode: 0o600 })
   try { chmodSync(tmp, 0o600) } catch {}
-  renameSync(tmp, file)
+  try {
+    replaceFile(tmp, file)
+  } catch (err) {
+    try { unlinkSync(tmp) } catch {}
+    throw err
+  }
 }
 
 export function engineKey(dir: string): string {
@@ -53,4 +77,10 @@ export function engineKey(dir: string): string {
   const key = randomBytes(24).toString("hex")
   writePrivate(file, key + "\n")
   return key
+}
+
+// Hex, not base64url: the shapes that carry it (handles, login ids, chat ids) are read by people
+// in logs and URLs, and hex never needs escaping.
+export function randomHex(n: number): string {
+  return randomBytes(n).toString("hex")
 }

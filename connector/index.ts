@@ -116,7 +116,7 @@ function healthChallenge(): string {
   return randomBytes(16).toString("hex")
 }
 
-// Byte-for-byte with `engine/health.ts` and engine-go's healthProof.
+// Byte-for-byte with `engine/health.ts`, which the engine answers with.
 function healthProof(key: string, nonce: string): string {
   return createHmac("sha256", key).update(HEALTH_PREFIX + nonce).digest("hex")
 }

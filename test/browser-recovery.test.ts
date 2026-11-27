@@ -110,7 +110,10 @@ test("sign-in choices name each Linux browser once, Edge included", () => {
   ])
 })
 
-test("a browser left in the legacy profile cannot block a new engine", { skip: !executable, timeout: 30_000 }, async () => {
+// Two real browsers start here, and launchBrowser alone may wait 30 s for one of them to open its
+// port. A 30 s test deadline therefore expired on a loaded runner while both launches were still
+// inside their own budgets; the deadline has to cover two launches plus the CDP round trips.
+test("a browser left in the legacy profile cannot block a new engine", { skip: !executable, timeout: 120_000 }, async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "mw-recovery-"))
   const opts = { executable, profileDir: path.join(root, "browser"), headless: true, proxy: "direct" }
   let old, next

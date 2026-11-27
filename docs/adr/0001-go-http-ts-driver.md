@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for `0.10.0`.
+Superseded by [ADR 0016](0016-typescript-engine.md) in `0.12.0`. Accepted for `0.10.0`.
 
 ## Context
 

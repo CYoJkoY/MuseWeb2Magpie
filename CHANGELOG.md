@@ -1,6 +1,17 @@
 # 更新记录
 
-## 未发布
+## 0.12.0 · 2026-11-27
+
+- 说明：下面标注 `engine-go/*` 与 `test/go-engine.test.ts` 的条目，写的是这些改动当初在 Go 引擎里的实现；0.12.0 把它们一并移植到 TypeScript，行为、错误码与安全不变量都不变，对应实现见 `engine/` 下的同名模块与 `test/engine-*.test.ts`，来龙去脉见 `docs/adr/0016-typescript-engine.md`。
+- 修复：从源码（`magpie plugin add github:…`）安装后报「未找到 muse-web engine 二进制文件」。原因是 `engine-go/bin/` 被 `.gitignore` 排除，git 安装永远拿不到随包的原生引擎，只有旧的 npm 压缩包才带着它。现在引擎本身就是 TypeScript，不再需要任何预编译二进制：插件用 `process.execPath` 直接运行 `engine/main.ts`（`MUSE_WEB_ENGINE_BIN` 仍可指向别的入口），缺入口时报「muse-web 引擎入口缺失：…（插件安装不完整，请重新安装 magpie-muse-web）」。git 安装与压缩包安装从此行为一致。
+- 变更：Go 引擎整体移植到 TypeScript，`engine-go/`、`tools/build-engine.ts`、`test/go-engine.test.ts` 删除。新增 `engine/main.ts`（入口、回环监听、父进程守护、预热 / 保活）、`engine/server.ts`（路由表、鉴权、SSE、错误映射、在飞预算）、`engine/store.ts` + `engine/accounts.ts`（账号存储）、`engine/bridge.ts`（NDJSON 驱动监督）、`engine/log.ts`、`engine/login-page.ts`、`engine/redact.ts`。协议、错误码、`engine.log` 的计时行与安全不变量都不变。
+- 变更：语言收敛为 Dart + Zig + TypeScript。本插件现在完全是 TypeScript；不再构建、打包或提交任何原生二进制，也不再需要 Go 工具链。
+- 修复：引擎与驱动的 NDJSON 通道在驱动退出后不再让整个进程因 `EPIPE` 崩溃——子进程 `stdin` 的 `error` 会退役当前代，写入失败回 `driver_down`，而不是抛出未处理的流错误。
+- 修复：SSE 回答结束后正确关闭响应（成功、`chat_failure` 与登录进度页三条路径都 `end()`），不再留下挂起的连接。
+- 修复：聊天请求读到正文后不再被误判为「客户端已断开」。原先监听 `req` 的 `close`（正文读完就会触发）导致每条聊天在 `readBody` 之后立刻中止；现在改为监听 `res` 的 `close` 并检查 `writableEnded`。
+- 修复：取消（客户端中途离开、额度读取超时、关闭标签页）真的会结束等待。移植后的 `engine/bridge.ts` 只在发请求前挂了一次中止监听，一个已经中止的信号永远走不到它，等待驱动的循环也没有中止分支——客户端离开后请求会一直挂着，占着账号的「正在回答」标记和在飞令牌，驱动不答就永远不放手。现在 `next()` 和 Go 的 `select` 一样在「驱动回消息 / 驱动退出 / 调用方中止」三者间选，中止时给驱动补一条 `{op:"abort"}` 并立刻带着 `AbortError` 返回；顺带去掉每条事件都挂一次的 `gone` 回调。
+- 测试：新增 `test/engine-server.test.ts`、`test/engine-http.test.ts`、`test/engine-store.test.ts`、`test/engine-log.test.ts`，把路由鉴权、Host 守卫、在飞预算、健康挑战、账号存储、日志单行化与驱动监督都按原有 Go 测试的意图重写。
+- 测试：`test/engine-http.test.ts` 另加两条——客户端在回答中途断开后账号立刻解除占用（而不是等驱动把话说完），以及面对一个永不回答的驱动时被取消的调用会立刻返回并确实给驱动发了 `abort`。
 
 - 安全：`MUSE_WEB_CHROME` 跟手填的浏览器路径走同一条规则。它点名的就是引擎要启动的程序，但 `findBrowser()` 原本只问 `existsSync`，于是 `MUSE_WEB_CHROME=chrome.exe` 会被解析到引擎自己的工作目录——要么因为看不见的原因失败，要么启动的是另一个同名程序，正是 ADR 0009 为手填入口关掉的那个洞；`browserOptions()` 也是同样的形状，一个根本起不来的配置值照样会出现在登录选项里。现在两处都先过 `normalizeBrowserPath()` 与 `browserPathProblem()`，相对路径、目录、不存在的文件按未设置处理，而不是退回自动扫描（一个过期的设置应该被说明，而不是被悄悄换成别的浏览器）；`engine/driver.ts` 在启动时把这个原因写进 `engine.log` 一次，浏览器没起来时可以从日志里找到解释。`browserPathProblem()` 顺带把平台与 `stat` 变成参数（默认仍取宿主），这样 Windows 形状的路径由 Windows 引擎判断、测试也能自带文件表，规则本身不变。新增 `test/browser-path.test.ts` 一个测试覆盖配置值的接受与三种拒绝、以及登录选项里不再出现这个值。`SECURITY.md` 不变量 17 补充说明，设计见 `docs/adr/0009-typed-browser-path.md` 的修订一节。
 - 安全：调试端口改由浏览器自己挑，引擎不再猜。`freePort()` 原本先绑一个 `127.0.0.1:0`、读回端口、关掉监听，再把这个号码交给浏览器当 `--remote-debugging-port`；这两步之间本机任何进程都能先绑上同一个端口，抢先回答引擎的 `/json/version` 探测，然后收到一条**带着账号 cookie 的 CDP 连接**——这条连接本身就是凭据，没有 `engine.key` 那样的 HMAC 挑战可以自证，抢到端口就等于拿到已登录的 muse.ai 标签页。现在 `engine/browser.ts` 的 `launchBrowser()` 传 `--remote-debugging-port=0`，由浏览器在监听就绪后自己写 `<profileDir>/DevToolsActivePort`，引擎只读这个文件：新增的 `readActivePort()` 拒绝超过 4096 字节的文件、不在 `1..65535` 的首行、以及第二行不以 `/devtools/browser/` 开头的文件（端口 0、非数字、`/devtools/page/` 都算「还没有答案」）；启动前用 `rmSync` 删掉 profile 里遗留的旧文件，免得把上一轮浏览器的端口当成这一轮的答案；新增的 `debuggerUrl()` 还要求 `/json/version` 回的地址是 `ws:`/`wss:`、端口与文件里的一致、主机是回环（`127.0.0.1`、`::1`、`localhost`）、路径在 `/devtools/browser/` 下，不满足就继续轮询而不是连上去。`LaunchOptions.port` 一并删除，调用方无法再把猜测塞回来；请浏览器自己挑端口的窗口本身不存在，所以这个抢占窗口就此消失。`login.ts` 用 `opened.port` 找 `/json/list` 的逻辑不变，拿到的是浏览器真实绑定的端口。新增 `test/browser-recovery.test.ts` 三个测试：端口文件的解析矩阵（有效文件、CRLF、缺第二行、端口 0、非数字、越界、超大文件）、地址校验矩阵（端口不符、非回环、页面目标、明文 http、垃圾值），以及引擎确实要求端口 0；原有的恢复测试用真实 Chromium 走完整条新路径。`SECURITY.md` 不变量增到二十三条，设计见 `docs/adr/0015-browser-chosen-debug-port.md`。

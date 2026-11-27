@@ -15,7 +15,8 @@ export function healthChallenge(): string {
   return randomBytes(16).toString("hex")
 }
 
-// Kept byte-for-byte with engine-go's healthProof.
+// The engine answers with this (engine/server.ts) and the plugin and connector check it with the
+// same code, so all three stay byte-for-byte identical.
 export function healthProof(key: string, nonce: string): string {
   return createHmac("sha256", key).update(PREFIX + nonce).digest("hex")
 }
@@ -25,4 +26,13 @@ export function provesHealth(body: any, key: string, nonce: string): boolean {
   if (!/^[0-9a-f]{64}$/.test(got)) return false
   const want = healthProof(key, nonce)
   return timingSafeEqual(Buffer.from(got, "hex"), Buffer.from(want, "hex"))
+}
+
+// The challenge comes from an unauthenticated caller, so its shape is checked before it is fed to
+// the HMAC: a MAC over arbitrary input would be an oracle for guessing the key's signature on
+// something else. The bounds are wider than any nonce this code sends.
+export function validNonce(nonce: unknown): boolean {
+  const text = typeof nonce === "string" ? nonce : ""
+  if (text.length < 8 || text.length > 64) return false
+  return /^[A-Za-z0-9_-]+$/.test(text)
 }

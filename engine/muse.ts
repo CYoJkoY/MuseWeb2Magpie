@@ -6,14 +6,15 @@
 import { randomUUID } from "node:crypto"
 import { CDP } from "./cdp.ts"
 import { launchBrowser } from "./browser.ts"
+import { ESSENTIAL, expiryMs } from "./accounts.ts"
+import { redact } from "./redact.ts"
 import type { Account, Cookies, ExpiryMap, Meter, UsageCard, UsageReading } from "./types.ts"
 
 declare const document: any
 
-// Cookies a sign-in must have before it counts. muse.ai used to add hatch_gw and hatch_vml
-// when the chat page opened; it no longer sends either (#2, #3). Saved when a response
-// sets them, never waited for.
-export const ESSENTIAL = ["hatch_sess", "hatch_native_auth_device"]
+// Re-exported so the page driver, the sign-in runner and the engine keep one definition each.
+export { ESSENTIAL, expiryMs }
+export { redact }
 
 // /api/session's words for a workspace that is there, and for one that is not. muse.ai used to
 // say only "assigned"; current builds also report "active", "ready", a running state, or nest
@@ -33,14 +34,6 @@ const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Geck
 
 export function cookieHeader(cookies: Cookies = {}) {
   return Object.entries(cookies || {}).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join("; ")
-}
-
-// Logs and error bodies end up in bug reports. Strip the shapes that carry credentials.
-export function redact(text: unknown) {
-  return String(text ?? "")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
-    .replace(/([?&](?:key|token|access_token|refresh_token|api_key)=)[^&\s]+/gi, "$1***")
-    .replace(/\b(hatch_[a-z_]+)=([^;\s]+)/gi, "$1=***")
 }
 
 // Set-Cookie lines → {cookies, exp} with exp in unix seconds.
@@ -66,14 +59,6 @@ export function parseSetCookies(lines: string[] = [], now = Date.now()): { cooki
     }
   }
   return { cookies, exp }
-}
-
-// The session cookie that decides expiry, in milliseconds; null when unknown.
-export function expiryMs(exp: ExpiryMap = {}): number | null {
-  const pos = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0)
-  if (pos(exp?.hatch_vml)) return pos(exp.hatch_vml) * 1000
-  const vals = ESSENTIAL.map((n) => pos(exp?.[n])).filter(Boolean)
-  return vals.length ? Math.min(...vals) * 1000 : null
 }
 
 // One Storage.setCookies entry: a cookie placed under both the host and its dot-domain, which is
