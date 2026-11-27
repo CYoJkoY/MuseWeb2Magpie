@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
-import { browserPathProblem, launchBrowser, normalizeBrowserPath } from "./browser.ts"
+import { browserPathProblem, launchBrowser, normalizeBrowserPath, pageUrl } from "./browser.ts"
 import { CDP } from "./cdp.ts"
 import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.ts"
 import { anyFetch } from "./local-fetch.ts"
@@ -28,6 +28,22 @@ type LoginRun = {
 // A sign-in window needs a desktop. Linux servers and SSH sessions often have none.
 export function noDesktop(platform = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
   return platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY
+}
+
+// The tab the sign-in window should be sent to, and only one this browser serves. /json/list
+// answers on the port the browser wrote into DevToolsActivePort, but the sign-in poll can ask
+// after that browser is gone: whoever holds the port then would receive the CDP session, and the
+// engine would navigate a page of its choosing. A target on another host, another port or another
+// endpoint kind is not this browser's page, so it is skipped; the tab on the configured site wins
+// over whatever else the window happens to hold.
+export function chatTarget(list: unknown, port: number, site: string): string | null {
+  if (!Array.isArray(list)) return null
+  const pages = list
+    .filter((t: any) => t && t.type === "page")
+    .map((t: any) => ({ address: pageUrl(t.webSocketDebuggerUrl, port), url: String(t.url || "") }))
+    .filter((t): t is { address: string; url: string } => Boolean(t.address))
+  const onSite = pages.find((t) => t.url.startsWith(site))
+  return (onSite ?? pages[0])?.address ?? null
 }
 
 export class Logins {
@@ -68,10 +84,17 @@ export class Logins {
   }
 
   async openChat(port: number) {
-    const list = await anyFetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json() as Promise<any[]>)
-    const tab = list.find((t) => t.type === "page")
-    if (!tab) return
-    const page = await CDP.connect(tab.webSocketDebuggerUrl)
+    const list = await anyFetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json() as Promise<unknown>)
+    const target = chatTarget(list, port, this.site)
+    if (!target) {
+      // A page that exists but is not this browser's is the squatter case: say so, instead of
+      // leaving the sign-in waiting for a chat page that will never open.
+      if (Array.isArray(list) && list.some((t: any) => t && t.type === "page")) {
+        throw new Error(`登录窗口的调试端口 ${port} 上没有属于这个浏览器的页面，跳过打开聊天页`)
+      }
+      return
+    }
+    const page = await CDP.connect(target)
     try {
       await page.send("Page.navigate", { url: `${this.site}/thread/new` })
     } finally {

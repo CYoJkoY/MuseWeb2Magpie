@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, w
 import { rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { browserArgs, browserCandidates, browserOptions, debuggerUrl, findBrowser, launchBrowser, readActivePort, sweepProfiles } from "../engine/browser.ts"
+import { browserArgs, browserCandidates, browserOptions, debuggerUrl, findBrowser, launchBrowser, pageUrl, readActivePort, sweepProfiles } from "../engine/browser.ts"
 import { Muse } from "../engine/muse.ts"
 
 const executable = findBrowser()
@@ -56,6 +56,21 @@ test("an answer on the port counts only if it is this browser's own debugger", (
   assert.equal(debuggerUrl("http://127.0.0.1:9333/devtools/browser/x", 9333), null)
   assert.equal(debuggerUrl(undefined, 9333), null)
   assert.equal(debuggerUrl("not a url", 9333), null)
+})
+
+test("a page target counts only if this browser serves it on its own port", () => {
+  const ws = "ws://127.0.0.1:9333/devtools/page/2F8A1C0E"
+  assert.equal(pageUrl(ws, 9333), ws)
+  assert.equal(pageUrl("ws://localhost:9333/devtools/page/x", 9333), "ws://localhost:9333/devtools/page/x")
+  assert.equal(pageUrl("ws://[::1]:9333/devtools/page/x", 9333), "ws://[::1]:9333/devtools/page/x")
+  // The port from DevToolsActivePort is the browser's; a page on another one is a squatter.
+  assert.equal(pageUrl("ws://127.0.0.1:9334/devtools/page/x", 9333), null)
+  assert.equal(pageUrl("ws://10.0.0.5:9333/devtools/page/x", 9333), null)
+  // The browser endpoint is not a page, and a page path is not the browser endpoint.
+  assert.equal(pageUrl("ws://127.0.0.1:9333/devtools/browser/x", 9333), null)
+  assert.equal(pageUrl("http://127.0.0.1:9333/devtools/page/x", 9333), null)
+  assert.equal(pageUrl(undefined, 9333), null)
+  assert.equal(pageUrl("not a url", 9333), null)
 })
 
 test("the engine asks the browser to pick its own debugging port", () => {

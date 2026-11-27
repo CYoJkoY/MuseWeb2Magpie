@@ -136,21 +136,33 @@ export function readActivePort(dir: string): number {
   return port
 }
 
-// The debugger address this browser is actually serving, or null. The port came from the
-// browser's own file, so the answer on it has to point back at that same port on loopback with a
-// browser path; anything else is a different listener that happened to hold the port.
-export function debuggerUrl(value: unknown, port: number): string | null {
+// An address this browser is actually serving, or null. The port came from the browser's own
+// file, so every answer on it has to point back at that same port on loopback, under the path that
+// kind of endpoint lives at; anything else is a different listener that happened to hold the port.
+// The engine reads two kinds: the browser itself and one of its pages.
+function endpointUrl(value: unknown, port: number, path: string): string | null {
   try {
     const url = new URL(String(value || ""))
     if (url.protocol !== "ws:" && url.protocol !== "wss:") return null
     if (url.port !== String(port)) return null
     const host = url.hostname.replace(/^\[|\]$/g, "")
     if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") return null
-    if (!url.pathname.startsWith("/devtools/browser/")) return null
+    if (!url.pathname.startsWith(path)) return null
     return url.toString()
   } catch {
     return null
   }
+}
+
+// The browser's own debugger endpoint, from /json/version.
+export function debuggerUrl(value: unknown, port: number): string | null {
+  return endpointUrl(value, port, "/devtools/browser/")
+}
+
+// A page target's endpoint, from /json/list. The engine navigates whatever it connects to, so a
+// page served by a listener that is not this browser is refused by the same rule.
+export function pageUrl(value: unknown, port: number): string | null {
+  return endpointUrl(value, port, "/devtools/page/")
 }
 
 // proxy: "" leaves the browser on the system's own setting, "direct" ignores it, a URL forces it.
