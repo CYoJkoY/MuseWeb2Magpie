@@ -109,6 +109,10 @@
     与首尾空白先由 `normalizeBrowserPath()` 去掉，不成对的引号保持原样、照旧被拒。测试见
     `test/browser-path.test.ts` 与 `contract.test.ts`。设计见
     [`docs/adr/0009-typed-browser-path.md`](docs/adr/0009-typed-browser-path.md)。
+    同一条规则同样适用于 `MUSE_WEB_CHROME`：它点名的就是引擎要启动的程序，所以
+    `findBrowser()` 与登录选项 `browserOptions()` 复用 `browserPathProblem()`，相对路径、
+    目录、不存在的文件一律按未设置处理（而不是退回自动扫描），驱动在 `engine.log` 里
+    说明原因。
 18. **配置的站点遵循凭据的传输规则。** `MUSE_WEB_SITE` 决定 muse.ai 会话 cookie 发到哪个源：
     浏览器每次加载页面都带着它，`muse.ts` 的每个 API 调用都把它发给同一个源。会话 cookie 是
     凭据，所以它跟 `engine.key` 走同一条规则（ADR 0006）：明文 http 只能到本机回环，其他地方

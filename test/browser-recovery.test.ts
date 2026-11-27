@@ -76,7 +76,10 @@ test("sign-in choices list installed browsers once and keep MUSE_WEB_CHROME firs
     "C:\\Users\\x\\AppData\\Local\\Chromium\\Application\\chrome.exe",
   ])
   const exists = (file) => installed.has(file)
-  const choices = browserOptions(env, "win32", exists)
+  // The configured path is judged as a file, not just as something that exists: the same rule the
+  // sign-in prompt applies to a typed path.
+  const stat = (file) => ({ isFile: () => installed.has(file) })
+  const choices = browserOptions(env, "win32", exists, stat)
   assert.deepEqual(choices, [
     { label: "MUSE_WEB_CHROME（Microsoft Edge）", value: env.MUSE_WEB_CHROME },
     { label: "Chromium", value: "C:\\Users\\x\\AppData\\Local\\Chromium\\Application\\chrome.exe" },

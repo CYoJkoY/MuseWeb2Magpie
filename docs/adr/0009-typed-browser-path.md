@@ -57,3 +57,23 @@ browser rather than about the path.
   the test that pins the Windows shape is skipped elsewhere rather than pretending otherwise.
 - `test/browser-path.test.ts` pins normalization, each rejection message and the Windows case;
   `contract.test.ts` asserts the same refusals over the real engine's `/v1/login` path.
+
+## Amendment: the configured path follows the same rule
+
+`MUSE_WEB_CHROME` was left behind by the original decision. It is the same promise as a typed
+path — it names the executable the engine will spawn — but `findBrowser()` only asked
+`existsSync`, so `MUSE_WEB_CHROME=chrome.exe` resolved against the engine's own working
+directory. That is the exact hole this ADR closed for the manual entry: either a failure nobody
+can explain, or a different program than the one that was meant. `browserOptions()` had the same
+shape, so a configured value that would not launch was still offered as a sign-in choice.
+
+- `findBrowser()` and `browserOptions()` now run the configured value through
+  `normalizeBrowserPath()` and `browserPathProblem()`, the same predicate the prompt and
+  `Logins.start()` use.
+- A value that fails the rule is treated as no answer at all, not as a reason to scan: a stale
+  setting is reported rather than silently overridden by whichever browser happens to be
+  installed. `engine/driver.ts` logs the reason once at startup, so a browser that does not start
+  is explainable from `engine.log`.
+- `browserPathProblem()` takes the platform and `stat` as parameters, defaulting to the host, so
+  the Windows shape can be judged on a Windows engine and the tests can supply their own file
+  table. The rule itself is unchanged.

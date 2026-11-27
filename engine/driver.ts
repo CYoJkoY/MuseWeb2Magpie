@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs"
 import path from "node:path"
 import process from "node:process"
 import readline from "node:readline"
-import { findBrowser } from "./browser.ts"
+import { browserPathProblem, findBrowser } from "./browser.ts"
 import { ensureFingerprintBrowser } from "./fingerprint.ts"
 import { Logins } from "./login.ts"
 import { AuthError, Muse, PromptTooLongError, QuotaError, redact, renewSession } from "./muse.ts"
@@ -91,6 +91,12 @@ const proxy = resolveProxy(env)
 // password is not silently a proxy that refuses the browser's requests.
 if (proxyHasCredentials(proxy)) log("muse-web: 代理地址带的用户名密码只用于引擎自己的请求；浏览器的 --proxy-server 里不带凭据")
 const fetchImpl = proxiedFetch(proxy)
+// MUSE_WEB_CHROME names the program this engine launches, so it follows the same rule as a path
+// typed into the sign-in prompt. Say why a configured value was set aside: otherwise the browser
+// that starts is a mystery, or there is none and the reason is not visible anywhere.
+const configuredBrowser = (env.MUSE_WEB_CHROME || "").trim()
+const configuredTrouble = configuredBrowser ? browserPathProblem(configuredBrowser) : null
+if (configuredTrouble) log(`muse-web: MUSE_WEB_CHROME ${configuredTrouble}；按未设置处理`)
 const fallbackExecutable = findBrowser(env)
 const mode = ["headless", "hidden", "show"].includes(env.MUSE_WEB_BROWSER || "") ? env.MUSE_WEB_BROWSER : "headless"
 const prewarm = env.MUSE_WEB_PREWARM !== "0"

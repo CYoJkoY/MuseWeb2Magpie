@@ -32,9 +32,14 @@ export function browserCandidates(platform = process.platform, env: NodeJS.Proce
   return [...new Set(dirs)].flatMap((dir) => names.map((name) => path.join(dir, name))).concat(["/opt/google/chrome/chrome"])
 }
 
-export function findBrowser(env: NodeJS.ProcessEnv = process.env, platform = process.platform, exists = existsSync): string | null {
-  const own = (env.MUSE_WEB_CHROME || "").trim()
-  if (own) return exists(own) ? own : null
+// MUSE_WEB_CHROME is the same promise as a typed path: it names the program the engine will run,
+// so it has to be absolute and name a regular file. A bare "chrome.exe" would be resolved against
+// the engine's own working directory — either a failure nobody can explain, or a different program
+// than the one the person meant. A value that fails the rule is treated as no answer at all rather
+// than falling back to a scan, so a stale setting is reported instead of silently overridden.
+export function findBrowser(env: NodeJS.ProcessEnv = process.env, platform = process.platform, exists = existsSync, stat: BrowserStat = statSync): string | null {
+  const own = normalizeBrowserPath(env.MUSE_WEB_CHROME || "")
+  if (own) return browserPathProblem(own, platform, stat) ? null : own
   return browserCandidates(platform, env).find((p) => exists(p)) ?? null
 }
 
@@ -48,18 +53,26 @@ export function normalizeBrowserPath(file: string): string {
   return typed
 }
 
-// browserPathProblem says why a typed browser path cannot be used, or null when it can. The path
-// has to be absolute and has to name a regular file: a relative path would be resolved against
-// whatever directory the engine happens to run in, so it either fails for no visible reason or
-// launches a different program than the one the person pointed at; a directory or a device would
-// fail later, inside the launch, with a message about a broken browser instead of a broken path.
-export function browserPathProblem(file: string): string | null {
+// The one thing browserPathProblem asks of a file: that it is a regular file. Narrower than
+// typeof statSync, so a caller or a test can stand in its own answer without building a whole
+// Stats object; statSync still satisfies it.
+export type BrowserStat = (file: string) => { isFile(): boolean }
+
+// browserPathProblem says why a browser path cannot be used, or null when it can. The path has to
+// be absolute and has to name a regular file: a relative path would be resolved against whatever
+// directory the engine happens to run in, so it either fails for no visible reason or launches a
+// different program than the one the person pointed at; a directory or a device would fail later,
+// inside the launch, with a message about a broken browser instead of a broken path.
+// It is judged for the platform the path is meant for: "C:\…" is not absolute on a POSIX host, but
+// a Windows engine judges Windows paths, and the sign-in prompt may run where the engine does not.
+export function browserPathProblem(file: string, platform = process.platform, stat: BrowserStat = statSync): string | null {
   const typed = normalizeBrowserPath(file)
   if (!typed) return "没有填浏览器路径"
-  if (!path.isAbsolute(typed)) return `浏览器路径要是完整的绝对路径：${typed}`
-  let info
+  const absolute = platform === "win32" ? path.win32.isAbsolute(typed) : path.posix.isAbsolute(typed)
+  if (!absolute) return `浏览器路径要是完整的绝对路径：${typed}`
+  let info: { isFile(): boolean }
   try {
-    info = statSync(typed)
+    info = stat(typed)
   } catch {
     return `浏览器路径不存在：${typed}`
   }
@@ -81,7 +94,7 @@ function browserName(file: string): string {
 // The sign-in prompt's choices: only browsers that are actually installed, one entry per browser.
 // MUSE_WEB_CHROME comes first when it points at an installed file, since the engine would have
 // picked it by itself; choosing an entry overrides that default for this sign-in only.
-export function browserOptions(env: NodeJS.ProcessEnv = process.env, platform = process.platform, exists = existsSync): Array<{ label: string; value: string }> {
+export function browserOptions(env: NodeJS.ProcessEnv = process.env, platform = process.platform, exists = existsSync, stat: BrowserStat = statSync): Array<{ label: string; value: string }> {
   const out: Array<{ label: string; value: string }> = []
   const seen = new Set<string>()
   // One entry per browser, not per path: one Linux install offers google-chrome,
@@ -92,8 +105,8 @@ export function browserOptions(env: NodeJS.ProcessEnv = process.env, platform = 
     seen.add(name)
     out.push({ label, value: file })
   }
-  const own = (env.MUSE_WEB_CHROME || "").trim()
-  if (own && exists(own)) add(own, browserName(own), `MUSE_WEB_CHROME（${browserName(own)}）`)
+  const own = normalizeBrowserPath(env.MUSE_WEB_CHROME || "")
+  if (own && !browserPathProblem(own, platform, stat)) add(own, browserName(own), `MUSE_WEB_CHROME（${browserName(own)}）`)
   for (const file of browserCandidates(platform, env)) {
     if (exists(file)) add(file, browserName(file))
   }

@@ -2,11 +2,11 @@
 // to be an absolute path naming a regular file. These tests pin the rule and its wording, which
 // the sign-in prompt shows as-is.
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
-import { browserPathProblem, normalizeBrowserPath } from "../engine/browser.ts"
+import { browserOptions, browserPathProblem, findBrowser, normalizeBrowserPath } from "../engine/browser.ts"
 
 test("a pasted browser path keeps its real characters", () => {
   assert.equal(normalizeBrowserPath("  /usr/bin/chromium  "), "/usr/bin/chromium")
@@ -45,4 +45,26 @@ test("a Windows path is still absolute on Windows", { skip: process.platform !==
   // The path must be one no runner has: the GitHub Windows image ships Chrome, so naming
   // Chrome would test whether Chrome is installed instead of whether the path is judged.
   assert.match(browserPathProblem("C:\\Program Files\\MuseWeb2Magpie Missing Browser\\chrome.exe") ?? "", /不存在/)
+})
+
+test("the configured browser follows the typed path rule", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-configured-browser-"))
+  try {
+    const browser = path.join(dir, "chrome.exe")
+    writeFileSync(browser, "")
+    mkdirSync(path.join(dir, "browser-dir"))
+    // A real file at an absolute path is used as configured.
+    assert.equal(findBrowser({ MUSE_WEB_CHROME: browser }, process.platform, existsSync, statSync), browser)
+    // A bare name would be resolved against the engine's own directory, so it is set aside
+    // instead of being handed to spawn — even when something with that name exists there.
+    assert.equal(findBrowser({ MUSE_WEB_CHROME: "chrome.exe", PATH: "/usr/bin" }, process.platform, () => true, statSync), null)
+    // A directory and a path that is not there are set aside the same way.
+    assert.equal(findBrowser({ MUSE_WEB_CHROME: path.join(dir, "browser-dir") }, process.platform, existsSync, statSync), null)
+    assert.equal(findBrowser({ MUSE_WEB_CHROME: path.join(dir, "missing.exe") }, process.platform, existsSync, statSync), null)
+    // The sign-in choices agree: a configured value that fails the rule is not offered.
+    const choices = browserOptions({ MUSE_WEB_CHROME: "chrome.exe", PATH: "/usr/bin" }, "linux", () => true, () => ({ isFile: () => true }))
+    assert.equal(choices.some((choice) => choice.label.startsWith("MUSE_WEB_CHROME")), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
