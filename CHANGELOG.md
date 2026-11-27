@@ -1,5 +1,15 @@
 # 更新记录
 
+## 0.12.6 · 2026-11-28
+
+- 变更：插件在 Magpie 里的行名改为 `MuseWeb2Magpie`（`package.json` 的 `magpie.name`）。npm 包名
+  `magpie-muse-web` 与 provider id `muse-web` 保持不变——前者不允许大写、且已装插件的 id 与
+  `cfg.provider` 键都依赖它；后者是 muse.ai 服务的标识。
+- 变更：Release 资产从 `magpie-muse-web-<版本>.tgz` 改名为 `MuseWeb2Magpie-<版本>.tgz`，与项目名
+  一致。打包仍是 `npm pack`，只在发布步骤里改名，npm 包名不变；从 Release 直接下载 tgz 的自动化
+  需要更新文件名。
+- 测试：`contract.test.ts` 锁定 `package.json` 的 `magpie.name` 为 `MuseWeb2Magpie`。
+
 ## 0.12.5 · 2026-11-28
 
 - 修复：Donut Browser 随附的 Wayfern 内核首次启动会要求执行 `--accept-terms-and-conditions`，

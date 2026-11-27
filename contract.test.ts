@@ -385,6 +385,7 @@ test("config describes the model and keeps what the user configured", async () =
   const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"))
   assert.match(hooks.auth.icon, /^data:image\/svg\+xml;base64,/)
   assert.equal(pkg.magpie.icon, hooks.auth.icon, "package.json's icon is icon.svg's")
+  assert.equal(pkg.magpie.name, "MuseWeb2Magpie", "package.json names the plugin MuseWeb2Magpie")
   assert.ok(pkg.files.includes("icon.svg"))
 })
 

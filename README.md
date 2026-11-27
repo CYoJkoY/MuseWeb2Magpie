@@ -394,11 +394,11 @@ npm test               # 插件契约 + 引擎集成测试（HTTP、存储、日
 
 `npm test` 直接跑源码：Node 22.18 起默认能从 `.ts` 里剥掉类型标注，没有额外的构建步骤。CI 会先安装 Node.js，再执行类型检查、no-JavaScript 守卫和完整测试。
 
-发布：先把 `package.json` 的版本号和 `CHANGELOG.md` 里同名小节准备好，再推送同名 tag。`.github/workflows/release.yml` 会校验 tag 与版本号一致、跑完整测试、`npm pack`，然后把 tgz 和 `assets/icon.png`、`assets/icon.ico` 传到 GitHub Release，发布说明取自 CHANGELOG 对应小节。补发已有 tag 时，在 Actions 里手动触发 `release` 并填入 tag。
+发布：先把 `package.json` 的版本号和 `CHANGELOG.md` 里同名小节准备好，再推送同名 tag。`.github/workflows/release.yml` 会校验 tag 与版本号一致、跑完整测试、`npm pack`，再把打出的 tgz 改名为 `MuseWeb2Magpie-<版本>.tgz`（npm 包名仍是 `magpie-muse-web`，Magpie 里的行名是 `MuseWeb2Magpie`），连同 `assets/icon.png`、`assets/icon.ico` 一起传到 GitHub Release，发布说明取自 CHANGELOG 对应小节。补发已有 tag 时，在 Actions 里手动触发 `release` 并填入 tag。
 
 ```sh
-git tag v0.12.5
-git push origin v0.12.5
+git tag v0.12.6
+git push origin v0.12.6
 ```
 
 没装浏览器时，用到浏览器的测试会自动跳过。Linux 环境可以用 Docker 跑：
@@ -437,7 +437,7 @@ MuseWeb2Magpie
 
 ## <img src="assets/readme/icons/roadmap.svg" width="24" height="24" alt=""> 状态与路线
 
-当前版本 **0.12.5**：纯 TypeScript 源码（不再有 Go 引擎）、TypeScript loopback 引擎、稳定的网页账号接入、会话复用、工具调用、额度卡片与自动续期；冷启动与驱动协议经过一轮性能剖析和优化。
+当前版本 **0.12.6**：纯 TypeScript 源码（不再有 Go 引擎）、TypeScript loopback 引擎、稳定的网页账号接入、会话复用、工具调用、额度卡片与自动续期；冷启动与驱动协议经过一轮性能剖析和优化。
 
 路线上的工作主要是提升与网页改版的兼容性、改进错误恢复与诊断，以及让引擎的部署形态更灵活。图片、文件上传与生图生视频不在计划内——那是 muse2api 的方向。
 
