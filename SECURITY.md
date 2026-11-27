@@ -99,6 +99,16 @@
     GET 之后标记文件不存在、同一运行时下带密钥的 `POST /v1/login` 之后存在，两个预算各自打满
     与释放，以及错密钥不占令牌。设计见
     [`docs/adr/0008-admission-control.md`](docs/adr/0008-admission-control.md)。
+17. **手填的浏览器路径必须是绝对路径的普通文件。** 登录前「手动填写浏览器路径…」是一处
+    「照人一句话就启动某个可执行文件」的地方，所以路径的形状要先被校验：`engine/browser.ts`
+    的 `browserPathProblem()` 要求绝对路径、`statSync` 能读到、并且 `isFile()` 为真，否则
+    带着原因被拒绝。插件（`index.ts` 的 `browserLogin()`）在开始登录前就报清楚，引擎
+    （`engine/login.ts` 的 `Logins.start()`）在真正启动前再否决一次——两边用同一份实现，
+    因为最终启动的是引擎。相对路径会被解析到引擎自己的工作目录，等于把 `chrome.exe`
+    变成「引擎目录下任意同名程序」；目录和设备会在启动里晚一步失败。粘贴带来的成对引号
+    与首尾空白先由 `normalizeBrowserPath()` 去掉，不成对的引号保持原样、照旧被拒。测试见
+    `test/browser-path.test.ts` 与 `contract.test.ts`。设计见
+    [`docs/adr/0009-typed-browser-path.md`](docs/adr/0009-typed-browser-path.md)。
 
 ## 已知残留风险
 

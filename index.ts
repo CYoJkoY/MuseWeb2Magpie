@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { dataDir, enginePort } from "./engine/paths.ts"
-import { browserOptions } from "./engine/browser.ts"
+import { browserOptions, browserPathProblem, normalizeBrowserPath } from "./engine/browser.ts"
 import { findFingerprintBrowser, findWayfernBrowser, isWayfernBrowser } from "./engine/fingerprint.ts"
 import { CHALLENGE_HEADER, healthChallenge, provesHealth } from "./engine/health.ts"
 import { anyFetch, credentialSafeUrl } from "./engine/local-fetch.ts"
@@ -238,13 +238,16 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
       throw new Error("选了「手动填写浏览器路径」，但没有填路径；请填浏览器可执行文件的完整路径")
     }
     // A typed path is this machine's own, so say now that it is wrong instead of letting the
-    // engine's first status poll say it a couple of seconds later.
-    if (picked === MANUAL_BROWSER && !existsSync(typed)) {
-      throw new Error(`浏览器路径不存在：${typed}；请填可执行文件的完整路径，例如 chrome.exe`)
+    // engine's first status poll say it a couple of seconds later. It must be absolute and name a
+    // regular file: a relative path would be resolved against whatever directory the engine runs
+    // in, which is not a promise anyone can make from a text box.
+    if (picked === MANUAL_BROWSER) {
+      const problem = browserPathProblem(typed)
+      if (problem) throw new Error(`${problem}；请填浏览器可执行文件的完整路径，例如 C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`)
     }
     // A browser picked from the scan is what the person meant; the typed path only stands in
     // when the scan missed it and there is nothing else to go on.
-    const browser = picked === MANUAL_BROWSER ? typed : picked || typed
+    const browser = picked === MANUAL_BROWSER ? normalizeBrowserPath(typed) : picked || normalizeBrowserPath(typed)
     const res = await control("/v1/login", "POST", "", browser ? { browser } : undefined)
     if (!res?.ok) throw new Error(res ? `muse-web 引擎没能开始登录（HTTP ${res.status}）` : downMessage())
     const { id, url } = await res.json() as any

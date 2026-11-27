@@ -1,6 +1,6 @@
 // Find and start a Chromium-family browser on macOS, Windows or Linux.
 import { spawn, type ChildProcess } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, statSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import path from "node:path"
@@ -36,6 +36,35 @@ export function findBrowser(env: NodeJS.ProcessEnv = process.env, platform = pro
   const own = (env.MUSE_WEB_CHROME || "").trim()
   if (own) return exists(own) ? own : null
   return browserCandidates(platform, env).find((p) => exists(p)) ?? null
+}
+
+// normalizeBrowserPath is what a person types into the sign-in prompt: paths get pasted with
+// surrounding quotes often enough to be worth accepting, and a trailing slash is never intended.
+export function normalizeBrowserPath(file: string): string {
+  let typed = String(file || "").trim()
+  while (typed.length >= 2 && ((typed.startsWith("\"") && typed.endsWith("\"")) || (typed.startsWith("'") && typed.endsWith("'")))) {
+    typed = typed.slice(1, -1).trim()
+  }
+  return typed
+}
+
+// browserPathProblem says why a typed browser path cannot be used, or null when it can. The path
+// has to be absolute and has to name a regular file: a relative path would be resolved against
+// whatever directory the engine happens to run in, so it either fails for no visible reason or
+// launches a different program than the one the person pointed at; a directory or a device would
+// fail later, inside the launch, with a message about a broken browser instead of a broken path.
+export function browserPathProblem(file: string): string | null {
+  const typed = normalizeBrowserPath(file)
+  if (!typed) return "没有填浏览器路径"
+  if (!path.isAbsolute(typed)) return `浏览器路径要是完整的绝对路径：${typed}`
+  let info
+  try {
+    info = statSync(typed)
+  } catch {
+    return `浏览器路径不存在：${typed}`
+  }
+  if (!info.isFile()) return `浏览器路径不是可执行文件：${typed}`
+  return null
 }
 
 // The name a person recognizes for a browser executable, used in the sign-in choices.

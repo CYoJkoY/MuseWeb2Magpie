@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
-import { launchBrowser } from "./browser.ts"
+import { browserPathProblem, launchBrowser, normalizeBrowserPath } from "./browser.ts"
 import { CDP } from "./cdp.ts"
 import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.ts"
 import { anyFetch } from "./local-fetch.ts"
@@ -96,10 +96,16 @@ export class Logins {
     // The browser chosen in the sign-in prompt applies to this window only; anything else keeps
     // the engine's own default (the fingerprint browser, then MUSE_WEB_CHROME, then Chrome,
     // Edge, Chromium, Brave).
-    const chosen = String(browser || "").trim()
-    if (chosen && !existsSync(chosen)) {
-      Object.assign(run, { status: "failed", error: `指定的浏览器不存在: ${chosen}` })
-      return id
+    const chosen = normalizeBrowserPath(String(browser || ""))
+    if (chosen) {
+      // The engine has the last word on a typed path: the plugin checks it too, but the engine is
+      // what launches it, and a path that is relative or not a file must fail here with that
+      // reason rather than a launch error about a browser that would not start.
+      const problem = browserPathProblem(chosen)
+      if (problem) {
+        Object.assign(run, { status: "failed", error: problem })
+        return id
+      }
     }
     // Preparing the browser can mean waiting for the first-run download of the fingerprint
     // browser, which takes longer than the plugin waits for this HTTP answer. Give the id back

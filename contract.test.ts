@@ -293,6 +293,10 @@ test("a local engine offers a manual browser path and sends it", async () => {
     // The sentinel is never sent as a path, and a missing path says so instead of using the default.
     await assert.rejects(oauth.authorize({ browser: "__manual__" }), /手动填写浏览器路径/)
     await assert.rejects(oauth.authorize({ browser: "__manual__", browserPath: path.join(manualDir, "missing.exe") }), /浏览器路径不存在/)
+    // A path the engine could not launch the way it was written is refused before anything starts:
+    // relative paths resolve against the engine's own directory, so they are never accepted.
+    await assert.rejects(oauth.authorize({ browser: "__manual__", browserPath: "chrome.exe" }), /绝对路径/)
+    await assert.rejects(oauth.authorize({ browser: "__manual__", browserPath: manualDir }), /不是可执行文件/)
     rmSync(manualDir, { recursive: true, force: true })
   } finally {
     const restore: Array<[string, string | undefined]> = [
