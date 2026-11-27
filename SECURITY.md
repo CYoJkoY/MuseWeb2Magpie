@@ -135,6 +135,17 @@
     请求照旧用完整的 URL（`proxiedFetch`），需要认证的代理仍然可用。`proxyHasCredentials()`
     让驱动在启动日志里说明一次，免得有人以为浏览器也在用那组凭据。测试见
     `test/engine.test.ts`。设计见 [`docs/adr/0012-proxy-credentials-off-argv.md`](docs/adr/0012-proxy-credentials-off-argv.md)。
+21. **远端响应体有上限，归档边到边写盘。** 安装指纹浏览器时读的三样东西——GitHub 的发布
+    文档、发布包的 `.manifest.json`、以及浏览器压缩包本身——大小都由远端决定。原本 JSON 走
+    `res.json()`、压缩包走 `Buffer.from(await res.arrayBuffer())`，一个永不结束或坏掉的响应
+    因此能把内存（以及写盘后的磁盘）撑爆，而且失败发生在活儿干完之后。现在
+    `engine/fingerprint.ts` 的 `readBounded()` 在带流时边读边计数、刚过上限就 `cancel()` 读取器
+    （真实 `fetch` 响应都有流），没有流时才整段读回再测量；`MAX_ARCHIVE_BYTES`（512 MiB）与
+    `MAX_JSON_BYTES`（1 MiB）是两个唯一的界限，`declaredLength()` 先看 `content-length`，声明的
+    大小超限时在分配内存或打开文件之前就被拒。`downloadTo()` 打开 `0600` 的文件、逐块
+    `writeSync`，内存不再随压缩包大小增长，一个只滴字节的响应变成带原因的拒绝而不是占满磁盘。
+    测试见 `test/fingerprint.test.ts`。设计见
+    [`docs/adr/0013-bounded-downloads.md`](docs/adr/0013-bounded-downloads.md)。
 
 ## 已知残留风险
 

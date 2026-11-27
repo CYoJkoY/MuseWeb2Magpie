@@ -7,6 +7,8 @@ import os from "node:os"
 import path from "node:path"
 import {
   APOSTATE_PIN,
+  boundedJson,
+  downloadTo,
   donutDataRoots,
   ensureFingerprintBrowser,
   extractZip,
@@ -61,7 +63,17 @@ function storedZip(files) {
 }
 
 function response(body, init = {}) {
-  return { ok: init.status === undefined || init.status < 400, status: init.status ?? 200, json: async () => body, arrayBuffer: async () => body }
+  // A real Response always has a body stream; a double without one is read through arrayBuffer,
+  // so JSON bodies are handed over as their bytes.
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body))
+  return {
+    ok: init.status === undefined || init.status < 400,
+    status: init.status ?? 200,
+    headers: init.headers || {},
+    body: init.body,
+    json: async () => body,
+    arrayBuffer: async () => bytes,
+  }
 }
 
 test("release assets are chosen for the host OS and CPU", () => {
@@ -302,5 +314,65 @@ test("the built-in zip reader writes stored entries inside the destination", () 
   assert.equal(made, 1)
   assert.equal(readFileSync(path.join(dir, "top", "chrome.exe"), "utf8"), "exe")
   assert.equal(rmSync !== undefined, true)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a download that announces more than the ceiling is refused before a byte is written", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-big-"))
+  const file = path.join(dir, "download", "apostate.zip")
+  const fetchImpl = async () =>
+    response(Buffer.from("small body"), { headers: { "content-length": String(8 * 1024 * 1024 * 1024) } })
+  await assert.rejects(() => downloadTo(fetchImpl, "https://example/apostate.zip", file), /上限/)
+  // The refusal happens before the file is opened, so nothing is left on disk.
+  assert.equal(existsSync(file), false)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a download that never ends is stopped at the ceiling instead of filling the disk", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-stream-"))
+  const file = path.join(dir, "download", "apostate.zip")
+  const chunk = Buffer.alloc(1024, 7)
+  let pulled = 0
+  const body = new ReadableStream({
+    pull(controller) {
+      pulled++
+      controller.enqueue(chunk)
+    },
+  })
+  const fetchImpl = async () => response(Buffer.alloc(0), { body })
+  await assert.rejects(() => downloadTo(fetchImpl, "https://example/apostate.zip", file, 8192), /上限/)
+  // Writing stopped at the ceiling, and the endless body was cancelled rather than drained.
+  assert.equal(existsSync(file) ? readFileSync(file).length <= 8192 : true, true)
+  assert.equal(pulled < 10_000, true)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a remote JSON body is parsed only under its own ceiling", async () => {
+  const small = await boundedJson(response({ sha256: "a".repeat(64) }), "校验清单")
+  assert.equal(small.sha256, "a".repeat(64))
+  const huge = Buffer.alloc(2 * 1024 * 1024, 0x20)
+  await assert.rejects(() => boundedJson(response(huge), "校验清单"), /上限/)
+  // A body within the ceiling but not JSON is refused with its own reason.
+  await assert.rejects(() => boundedJson(response(Buffer.from("not json")), "校验清单"), /不是合法的 JSON/)
+})
+
+test("a release that announces an enormous archive falls back instead of downloading it", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-huge-"))
+  const version = "0.5.1-huge"
+  const name = `apostate-${version}-windows-x64.zip`
+  const downloadUrl = `https://example/${name}`
+  const fetchImpl = async (url) => {
+    if (url === `https://api.github.com/repos/heretic-tech/apostate/releases/tags/v${version}`)
+      return response({ assets: [{ name, browser_download_url: downloadUrl, size: 8 * 1024 * 1024 * 1024 }] })
+    if (url === `${downloadUrl}.manifest.json`) return response({ sha256: "b".repeat(64) })
+    if (url === downloadUrl)
+      return response(Buffer.from("x"), { headers: { "content-length": String(8 * 1024 * 1024 * 1024) } })
+    throw new Error(`unexpected fetch ${url}`)
+  }
+  const env = { HOME: dir, USERPROFILE: dir, LOCALAPPDATA: path.join(dir, "empty"), APPDATA: path.join(dir, "empty"), MUSE_WEB_FINGERPRINT_VERSION: version }
+  const picked = await ensureFingerprintBrowser({ dir, env, platform: "win32", arch: "x64", fetchImpl, exists: () => false, log: () => {} })
+  assert.equal(picked, null)
+  const download = path.join(dir, "browsers", "apostate", "download")
+  assert.equal(existsSync(download) ? readdirSync(download).length : 0, 0)
   rmSync(dir, { recursive: true, force: true })
 })

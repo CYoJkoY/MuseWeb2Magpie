@@ -9,7 +9,7 @@
 // like a normal machine. --fingerprint keeps that persona stable across restarts.
 import { spawnSync } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
-import { chmodSync, closeSync, existsSync as fsExists, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, existsSync as fsExists, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { inflateRawSync, zstdDecompressSync } from "node:zlib"
@@ -402,6 +402,60 @@ export function extractArchive(file: string, destDir: string, log: (msg: string)
 
 const RELEASE_API = `https://api.github.com/repos/${APOSTATE_REPO}/releases`
 
+// The installer runs while the engine is starting, and a remote body is free to be any size: one
+// that never ends would fill memory (or the disk) before a hash check ever sees the bytes. Both
+// remote reads therefore have a ceiling. A real Chromium archive is around 150 MB, so the archive
+// limit leaves room for a larger build without leaving room for a hostile one.
+export const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+export const MAX_JSON_BYTES = 1024 * 1024
+
+// The size the response announces, if any. A real Headers object and the plain object a test
+// double returns both work here; a missing or unreadable header counts as "announced nothing".
+function declaredLength(res: any): number {
+  const raw = typeof res?.headers?.get === "function" ? res.headers.get("content-length") : res?.headers?.["content-length"]
+  const value = Number(raw ?? "")
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+// Reads a whole response body under a ceiling. A real response has a stream, so the limit is
+// enforced while the bytes arrive rather than after they are all in memory; a double that only
+// knows arrayBuffer is read in one piece and measured afterwards.
+export async function readBounded(res: any, limit: number, what: string): Promise<Buffer> {
+  const announced = declaredLength(res)
+  if (announced > limit) throw new Error(`${what}超过 ${limit} 字节上限（HTTP 声明 ${announced} 字节）`)
+  const body = res?.body
+  if (!body || typeof body.getReader !== "function") {
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.length > limit) throw new Error(`${what}超过 ${limit} 字节上限（实际 ${buf.length} 字节）`)
+    return buf
+  }
+  const reader = body.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > limit) {
+      try { await reader.cancel() } catch {}
+      throw new Error(`${what}超过 ${limit} 字节上限`)
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks, total)
+}
+
+// The JSON reads on this path (a release's asset list, a ".manifest.json") are the same rule: a
+// body of unbounded size is refused before it is parsed.
+export async function boundedJson(res: any, what: string, limit = MAX_JSON_BYTES): Promise<any> {
+  const text = (await readBounded(res, limit, what)).toString("utf8")
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`${what}不是合法的 JSON`)
+  }
+}
+
 function assetKey(platform: string, arch: string): string {
   const cpu = arch === "arm64" ? "arm64" : arch === "x64" ? "x64" : String(arch || "")
   return `${platform}-${cpu}`
@@ -434,7 +488,7 @@ async function readManifestSha(fetchImpl: typeof fetch, url: string): Promise<st
   try {
     const res = await fetchImpl(`${url}.manifest.json`, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) return ""
-    const body = await res.json() as any
+    const body = await boundedJson(res, "指纹浏览器的校验清单")
     const sha = String(body?.sha256 || "").toLowerCase()
     return /^[0-9a-f]{64}$/.test(sha) ? sha : ""
   } catch {
@@ -461,7 +515,7 @@ async function resolveAsset({ fetchImpl, version, platform, arch, log }: {
       signal: AbortSignal.timeout(20_000),
     })
     if (res.ok) {
-      const body = await res.json() as any
+      const body = await boundedJson(res, "指纹浏览器的发布信息")
       assets = Array.isArray(body?.assets) ? body.assets : []
     }
   } catch (err: any) {
@@ -486,13 +540,39 @@ async function resolveAsset({ fetchImpl, version, platform, arch, log }: {
   return null
 }
 
-async function downloadTo(fetchImpl: typeof fetch, url: string, file: string): Promise<number> {
+// The archive itself is written as it arrives: memory stays flat whatever the size, and the
+// ceiling turns an endless body into a refusal with a reason instead of a full disk.
+export async function downloadTo(fetchImpl: typeof fetch, url: string, file: string, limit = MAX_ARCHIVE_BYTES): Promise<number> {
   const res = await fetchImpl(url, { redirect: "follow", signal: AbortSignal.timeout(30 * 60_000) })
   if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`)
-  const buf = Buffer.from(await res.arrayBuffer())
+  const announced = declaredLength(res)
+  if (announced > limit) throw new Error(`下载超过 ${limit} 字节上限（HTTP 声明 ${announced} 字节）`)
   mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, buf)
-  return buf.length
+  const body = (res as any).body
+  if (!body || typeof body.getReader !== "function") {
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.length > limit) throw new Error(`下载超过 ${limit} 字节上限（实际 ${buf.length} 字节）`)
+    writeFileSync(file, buf)
+    return buf.length
+  }
+  const reader = body.getReader()
+  const fd = openSync(file, "w", 0o600)
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > limit) {
+        try { await reader.cancel() } catch {}
+        throw new Error(`下载超过 ${limit} 字节上限`)
+      }
+      writeSync(fd, value)
+    }
+  } finally {
+    closeSync(fd)
+  }
+  return total
 }
 
 // One installer at a time across engines sharing the data dir. A lock older than 10 minutes is a
