@@ -120,9 +120,13 @@ that failed is the first real one of the whole job, which is the slowest launch 
   waited, whether `DevToolsActivePort` is still missing or what it holds (200 bytes at most), the
   last probe's answer, and the browser's last three stderr lines. `startFailure()` shares that
   stderr tail, so both ways a start can fail report the same way.
+- The failure is built before the temporary profile is closed. Closing removes that directory, so
+  the other order reports a port file that was there all along as one that never arrived — which
+  is exactly the case the message exists to separate.
 - `test/browser-start.test.ts` pins the message matrix, the budget rules, and a POSIX-only stall
-  (a fake browser that stays alive without writing the file) so the loop is exercised without a
-  browser. The real-browser recovery test's deadline follows the budget to 180 s.
+  (a fake browser that writes a port file nobody can use and stays alive) so the loop is exercised
+  without a browser, including the order above. The real-browser recovery test's deadline follows
+  the budget to 180 s.
 
 A retry inside the test would have made the run green without saying anything about the cause; the
 budget and the message are what make the next occurrence either not happen or explain itself.
