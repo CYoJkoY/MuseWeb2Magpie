@@ -8,7 +8,6 @@ import path from "node:path"
 import { deflateRawSync, zstdCompressSync } from "node:zlib"
 import {
   APOSTATE_PIN,
-  boundedJson,
   downloadTo,
   donutDataRoots,
   ensureFingerprintBrowser,
@@ -21,6 +20,7 @@ import {
   releaseFileName,
   verifySha256,
 } from "../engine/fingerprint.ts"
+import { boundedJson } from "../engine/bounded.ts"
 
 const assets = [
   { name: "apostate-0.5.1-windows-x64.zip", browser_download_url: "https://example/win.zip", size: 10 },

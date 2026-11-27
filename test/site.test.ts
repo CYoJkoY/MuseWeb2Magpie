@@ -6,10 +6,24 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
+import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { siteOrDefault, siteProblem } from "../engine/site.ts"
 import { MuseWebPlugin } from "../index.ts"
+
+// The plugin checks a port before it checks the site, so this test needs a port nothing answers on
+// — a Magpie the person is running would otherwise hold the default one and answer for it.
+function closedPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.on("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as net.AddressInfo
+      server.close(() => resolve(port))
+    })
+  })
+}
 
 test("the site the cookies ride to must be loopback http or https", () => {
   for (const value of [undefined, "", "   ", "https://muse.ai", "http://127.0.0.1:3000", "http://localhost:3000/", "http://[::1]:3000"]) {
@@ -36,15 +50,18 @@ test("siteOrDefault keeps the muse.ai default and trims slashes", () => {
 
 test("the plugin refuses to start an engine pointed at an unsafe site, and the reason is the error", async () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "mw-site-"))
+  const port = await closedPort()
   const previous = {
     home: process.env.MUSE_WEB_HOME,
     site: process.env.MUSE_WEB_SITE,
+    port: process.env.MUSE_WEB_ENGINE_PORT,
     engine: process.env.MUSE_WEB_ENGINE,
     key: process.env.MUSE_WEB_ENGINE_KEY,
   }
   Object.assign(process.env, {
     MUSE_WEB_HOME: home,
     MUSE_WEB_SITE: "http://mirror.example.test:3000",
+    MUSE_WEB_ENGINE_PORT: String(port),
   })
   delete process.env.MUSE_WEB_ENGINE
   delete process.env.MUSE_WEB_ENGINE_KEY
@@ -58,6 +75,7 @@ test("the plugin refuses to start an engine pointed at an unsafe site, and the r
     for (const [name, value] of [
       ["MUSE_WEB_HOME", previous.home],
       ["MUSE_WEB_SITE", previous.site],
+      ["MUSE_WEB_ENGINE_PORT", previous.port],
       ["MUSE_WEB_ENGINE", previous.engine],
       ["MUSE_WEB_ENGINE_KEY", previous.key],
     ] as const) {

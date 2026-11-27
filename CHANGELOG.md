@@ -1,5 +1,12 @@
 # 更新记录
 
+## 0.12.3 · 2026-11-27
+
+- 安全：浏览器调试端口上的两份答复也有大小上限。启动时确认端口属于这个浏览器读的是 `/json/version`，登录时挑标签页读的是 `/json/list`，两处原本都直接 `res.json()`，读到多大就收多大。端口是浏览器写进 `DevToolsActivePort` 的那个，但浏览器可以在引擎去问的时候已经不在了——0.12.2 已经把接手端口的进程当作不可信，加上了端口一致、回环主机、路径前缀的校验；可这些校验要等整份答复解析出来才跑得起来。于是同一个抢占者还有更便宜的一招：不必冒充 CDP，只要回一段永不结束的正文，回环速度下几秒就是几百 MB，引擎在看见任何地址之前就被撑死（`AbortSignal.timeout` 限制的是时间，不是字节）。现在 `/json/version` 与 `/json/list` 都走 `engine/bounded.ts` 的 `boundedJson()`：先看 `content-length`，声明超限就在分配内存之前拒绝；带流时边读边计数，到 `MAX_DEVTOOLS_BYTES`（1 MiB）就 `cancel()` 读取器再报一条带原因的错误。登录页的 `openChat()` 改用 `engine/cdp.ts` 的 `httpJSON()`，启动探测与登录轮询从此是同一份读取实现。
+- 变更：`declaredLength()`、`readBounded()`、`boundedJson()` 从 `engine/fingerprint.ts` 抽到新文件 `engine/bounded.ts`，指纹浏览器安装器与 CDP 客户端共用。指纹下载这条路径（ADR 0013）本来就是同一个规则，两份实现迟早会有一份忘记上限；CDP 客户端是最低层，也不该反过来依赖浏览器安装器。
+- 测试：新增 `test/devtools-bounded.test.ts`，用回环上的真实监听器顶替浏览器——声明 8 GiB 的正文在读取之前被拒、永不结束的正文在上限处被截断且读取器被取消、上限之内但不是 JSON 的正文有自己的原因、正常答复照旧解析、`openChat()` 受同一条规则约束。`SECURITY.md` 不变量 23 补充说明，设计见 `docs/adr/0015-browser-chosen-debug-port.md` 的修订一节。
+- 测试：`test/site.test.ts` 里验证站点规则的那条改在临时挑出的空闲端口上跑。插件先看端口有没有人应答、再看站点，本机正跑着的 Magpie 会占着默认端口，把「不安全站点」这条测试带成「端口被占用」——测试隔离问题，不是规则失效。
+
 ## 0.12.2 · 2026-11-27
 
 - 安全：登录窗口打开聊天页时，`/json/list` 回的目标也走与调试端口同一条规则。0.12.0 之后启动路径已经用 `debuggerUrl()` 校验 `/json/version`，但登录轮询对 `/json/list` 里每个条目的 `webSocketDebuggerUrl` 一次都没检查过：登录窗口会开上几分钟，浏览器中途退出、端口被本机另一个进程接管时，引擎会把这个抢占者的地址当成自己的浏览器，连上去发 `Page.navigate`，等于把一条带登录态的操作通道交给对方——和 ADR 0015 里那个抢占窗口是同一个抢占者，只是晚了一步。现在 `engine/browser.ts` 新增 `endpointUrl()`，把校验收成一处（`ws:`/`wss:`、回环主机、端口与浏览器自己报的一致、路径前缀），`debuggerUrl()` 取 `/devtools/browser/`、新增 `pageUrl()` 取 `/devtools/page/`；`engine/login.ts` 新增导出 `chatTarget()`，只接受 `pageUrl()` 通过的目标、同站标签页优先，`openChat()` 只连它——列表里没有属于这个浏览器端口的目标时不再导航，抛出一条说明（`登录窗口的调试端口 <port> 上没有属于这个浏览器的页面，跳过打开聊天页`），把会话留给下一个人而不是交给一个来路不明的地址。

@@ -178,7 +178,13 @@
     登录页要导航的那个标签页走同一条规则：`pageUrl()` 只接受端口一致、主机回环、路径在
     `/devtools/page/` 下的地址，`chatTarget()` 因此只连这个浏览器自己的页面（同站标签页优先）；
     端口在登录期间被别的进程接手时，一个页面都不连，登录只留一条说明，不会把 CDP 会话交出去。
-    测试见 `test/browser-recovery.test.ts`、`test/login-target.test.ts`。设计见
+    端口上那两份答复本身也有上限：`/json/version` 与 `/json/list` 都由 `engine/cdp.ts` 的
+    `httpJSON()` 读取，它走 `engine/bounded.ts` 的 `boundedJson()`——先看 `content-length`，
+    带流时边读边计数、到顶 `cancel()`，上限 `MAX_DEVTOOLS_BYTES`（1 MiB，真实浏览器的答复是
+    几 KB）。抢占端口的人不必冒充 CDP，只要会写 HTTP 就能用一段永不结束的正文把引擎撑死；
+    地址校验要等整份答复到手才跑得起来，所以这道上限在字节到达时生效，而不是之后。
+    测试见 `test/browser-recovery.test.ts`、`test/login-target.test.ts`、
+    `test/devtools-bounded.test.ts`。设计见
     [`docs/adr/0015-browser-chosen-debug-port.md`](docs/adr/0015-browser-chosen-debug-port.md)。
 
 ## 已知残留风险

@@ -1,5 +1,6 @@
 // Minimal Chrome DevTools Protocol client over the runtime's own WebSocket (Bun, Node ≥ 22).
 // Ported from muse2api's cdp.py (MIT, MUSE2API Authors).
+import { boundedJson } from "./bounded.ts"
 import { anyFetch } from "./local-fetch.ts"
 
 export class CDPError extends Error {}
@@ -101,7 +102,14 @@ export class CDP {
   }
 }
 
+// The answers a debugging port gives are read under a ceiling. The port is the one the browser
+// wrote into DevToolsActivePort, but the browser can be gone by the time the engine asks, and
+// whoever holds the port then is free to answer with a body of any size. The address checks
+// (browser.ts) only see a parsed answer, so an endless body would be in memory long before any of
+// them ran; a timeout bounds the wait, not the bytes. The browser's own answers are a few KB.
+export const MAX_DEVTOOLS_BYTES = 1024 * 1024
+
 export async function httpJSON(url: string, timeoutMs = 5000): Promise<any> {
   const res = await anyFetch(url, { signal: AbortSignal.timeout(timeoutMs) })
-  return res.json()
+  return boundedJson(res, "浏览器调试端口的答复", MAX_DEVTOOLS_BYTES)
 }

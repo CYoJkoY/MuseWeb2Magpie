@@ -7,9 +7,8 @@ import { randomBytes } from "node:crypto"
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
 import { browserPathProblem, launchBrowser, normalizeBrowserPath, pageUrl } from "./browser.ts"
-import { CDP } from "./cdp.ts"
+import { CDP, httpJSON } from "./cdp.ts"
 import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.ts"
-import { anyFetch } from "./local-fetch.ts"
 import { AuthError, ESSENTIAL, renewSession } from "./muse.ts"
 import type { Cookies, ExpiryMap, SavedAccount } from "./types.ts"
 
@@ -84,7 +83,9 @@ export class Logins {
   }
 
   async openChat(port: number) {
-    const list = await anyFetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json() as Promise<unknown>)
+    // Same bounded read as the launch probe: this is the same port, and the same squatter may be
+    // the one answering it.
+    const list: unknown = await httpJSON(`http://127.0.0.1:${port}/json/list`, 2000)
     const target = chatTarget(list, port, this.site)
     if (!target) {
       // A page that exists but is not this browser's is the squatter case: say so, instead of

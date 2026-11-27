@@ -79,3 +79,26 @@ choosing and send `Page.navigate` down it.
 
 Nothing changes for a healthy browser: it answers `ws://127.0.0.1:<port>/devtools/page/<id>`,
 which passes unchanged.
+
+## Revision: the answers on that port are bounded (`0.12.3`)
+
+Both answers the engine takes from the port were still read with `res.json()`, and the checks
+above only see a parsed answer. That left the cheapest version of the same attack: a process that
+takes the port does not have to impersonate CDP at all — it only has to answer with a body that
+never ends. Loopback hands over hundreds of megabytes in the seconds before the timeout fires, and
+the engine dies before any address rule runs. A timeout bounds the wait, not the bytes.
+
+- The read rule now lives in `engine/bounded.ts` (`declaredLength()`, `readBounded()`,
+  `boundedJson()`), shared by the fingerprint-browser installer and the CDP client. It was already
+  written for the installer (ADR 0013); a second copy in the protocol layer would have been a
+  second place to forget the ceiling.
+- `engine/cdp.ts` `httpJSON()` reads through `boundedJson()` with `MAX_DEVTOOLS_BYTES` (1 MiB — a
+  real `/json/list` for a normal window is a few KB), so a declared size past the ceiling is
+  refused before a byte is buffered, and a stream is cancelled the moment it crosses it.
+- `engine/login.ts` `openChat()` uses that same `httpJSON()` instead of its own
+  `anyFetch(...).then((r) => r.json())`, so the launch probe and the sign-in poll cannot drift
+  apart again.
+- `test/devtools-bounded.test.ts` stands a real listener on loopback in the browser's place: an
+  announced 8 GiB body is refused from the announcement, an endless body is cut off at the ceiling
+  with the reader cancelled, a body within the ceiling that is not JSON gets its own reason, a
+  normal answer still parses, and `openChat()` is bounded by the same rule.
