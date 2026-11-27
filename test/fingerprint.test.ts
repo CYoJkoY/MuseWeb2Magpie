@@ -5,12 +5,14 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { deflateRawSync, zstdCompressSync } from "node:zlib"
 import {
   APOSTATE_PIN,
   boundedJson,
   downloadTo,
   donutDataRoots,
   ensureFingerprintBrowser,
+  extractArchive,
   extractZip,
   findFingerprintBrowser,
   findWayfernBrowser,
@@ -51,6 +53,44 @@ function storedZip(files) {
     entry.writeUInt32LE(offset, 42)
     central.push(entry, Buffer.from(name))
     offset += 30 + name.length + content.length
+  }
+  const directory = Buffer.concat(central)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(files.length, 8)
+  end.writeUInt16LE(files.length, 10)
+  end.writeUInt32LE(directory.length, 12)
+  end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...chunks, directory, end])
+}
+
+// The same container, but with every entry deflated: what a real release ships, and what a
+// decompression bomb needs in order to be small on the wire and enormous when unpacked.
+function deflatedZip(files) {
+  const chunks = []
+  const central = []
+  let offset = 0
+  for (const [name, data] of files) {
+    const content = Buffer.isBuffer(data) ? data : Buffer.from(data)
+    const packed = deflateRawSync(content)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(8, 8)
+    local.writeUInt32LE(packed.length, 18)
+    local.writeUInt32LE(content.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    chunks.push(local, Buffer.from(name), packed)
+    const entry = Buffer.alloc(46)
+    entry.writeUInt32LE(0x02014b50, 0)
+    entry.writeUInt16LE(20, 4)
+    entry.writeUInt16LE(8, 10)
+    entry.writeUInt32LE(packed.length, 20)
+    entry.writeUInt32LE(content.length, 24)
+    entry.writeUInt16LE(name.length, 28)
+    entry.writeUInt32LE(offset, 42)
+    central.push(entry, Buffer.from(name))
+    offset += 30 + name.length + packed.length
   }
   const directory = Buffer.concat(central)
   const end = Buffer.alloc(22)
@@ -374,5 +414,44 @@ test("a release that announces an enormous archive falls back instead of downloa
   assert.equal(picked, null)
   const download = path.join(dir, "browsers", "apostate", "download")
   assert.equal(existsSync(download) ? readdirSync(download).length : 0, 0)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("an archive that inflates past the ceiling is refused instead of filling memory", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-bomb-"))
+  // 16 MiB of zeros is a few kilobytes on the wire and far past the budget below, so the entry
+  // has to be stopped by its expanded size rather than by what arrived.
+  const bomb = deflatedZip([["apostate/chrome.exe", Buffer.alloc(16 * 1024 * 1024)]])
+  assert.throws(() => extractZip(bomb, dir, () => {}, { maxBytes: 1024 * 1024 }), /上限/)
+  assert.equal(existsSync(path.join(dir, "apostate", "chrome.exe")), false)
+  // The same archive unpacks once the budget allows it: the ceiling is the only difference.
+  assert.equal(extractZip(bomb, dir, () => {}, { maxBytes: 32 * 1024 * 1024 }), 1)
+  assert.equal(readFileSync(path.join(dir, "apostate", "chrome.exe")).length, 16 * 1024 * 1024)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a central directory that claims too many entries is refused", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-many-"))
+  const zip = deflatedZip([["a.txt", "a"], ["b.txt", "b"], ["c.txt", "c"]])
+  assert.throws(() => extractZip(zip, dir, () => {}, { maxEntries: 2 }), /上限/)
+  assert.equal(extractZip(zip, dir, () => {}, { maxEntries: 3 }), 3)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("extractArchive drops a tree that expands past the ceiling", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-bomb-file-"))
+  const file = path.join(dir, "apostate.zip")
+  writeFileSync(file, deflatedZip([["apostate/chrome.exe", Buffer.alloc(8 * 1024 * 1024)]]))
+  assert.equal(extractArchive(file, path.join(dir, "out"), () => {}, { maxBytes: 1024 * 1024 }), false)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a tar.zst that inflates past the ceiling is refused before it is written out", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mw-fp-zst-"))
+  const file = path.join(dir, "apostate.tar.zst")
+  writeFileSync(file, zstdCompressSync(Buffer.alloc(8 * 1024 * 1024)))
+  assert.equal(extractArchive(file, path.join(dir, "out"), () => {}, { maxBytes: 1024 * 1024 }), false)
+  // The intermediate .tar is never written, so nothing large is left behind either.
+  assert.equal(existsSync(path.join(dir, "apostate.tar")), false)
   rmSync(dir, { recursive: true, force: true })
 })

@@ -290,11 +290,36 @@ function safeJoin(root: string, name: unknown): string | null {
   return full
 }
 
+// The download ceiling bounds what arrives; these bound what it expands to. A real Chromium build
+// unpacks to well under a gigabyte, so the total leaves room for a bigger build without leaving
+// room for a decompression bomb: a 512 MiB archive can inflate to terabytes, and the built-in
+// reader would otherwise hold every byte of that in memory before writing it out.
+export const MAX_EXTRACT_BYTES = 2 * 1024 * 1024 * 1024
+export const MAX_ARCHIVE_ENTRIES = 100_000
+
+export interface ExtractLimits {
+  maxBytes?: number
+  maxEntries?: number
+}
+
+// One deflated entry, under whatever budget is left. zlib reports a ceiling it was given as
+// ERR_BUFFER_TOO_LARGE; anything else is a real decoding error and keeps its own message.
+function inflateBounded(comp: Buffer, name: string, remaining: number, maxBytes: number): Buffer {
+  try {
+    return inflateRawSync(comp, { maxOutputLength: Math.min(remaining, 0x7fffffff) })
+  } catch (err: any) {
+    if (err?.code === "ERR_BUFFER_TOO_LARGE") throw new Error(`zip: ${name} 解压后超过 ${maxBytes} 字节上限`)
+    throw err
+  }
+}
+
 // A ZIP reader good enough for a Chromium build: stored and deflated entries, ZIP64 sizes.
 // Returns the number of files written. Used for the Windows/macOS .zip and as the fallback when
 // no system tar can read a zip.
-export function extractZip(buffer: Buffer | Uint8Array, destDir: string, log: (msg: string) => void = () => {}): number {
+export function extractZip(buffer: Buffer | Uint8Array, destDir: string, log: (msg: string) => void = () => {}, limits: ExtractLimits = {}): number {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)
+  const maxBytes = limits.maxBytes ?? MAX_EXTRACT_BYTES
+  const maxEntries = limits.maxEntries ?? MAX_ARCHIVE_ENTRIES
   let eocd = -1
   const stop = Math.max(0, buf.length - 22 - 0xffff)
   for (let i = buf.length - 22; i >= stop; i--) {
@@ -313,8 +338,12 @@ export function extractZip(buffer: Buffer | Uint8Array, destDir: string, log: (m
       }
     }
   }
+  // A central directory claiming more entries than this is refused outright: each one costs a
+  // file on disk, and a small archive can name an unbounded number of them.
+  if (!Number.isFinite(count) || count < 0 || count > maxEntries) throw new Error(`zip: 条目数 ${count} 超过 ${maxEntries} 上限`)
   let p = cenOff
   let made = 0
+  let total = 0
   for (let n = 0; n < count && p + 46 <= buf.length; n++) {
     if (buf.readUInt32LE(p) !== CEN_SIG) break
     const method = buf.readUInt16LE(p + 10)
@@ -348,14 +377,19 @@ export function extractZip(buffer: Buffer | Uint8Array, destDir: string, log: (m
     const leLen = buf.readUInt16LE(localOff + 28)
     const dataStart = localOff + 30 + lnLen + leLen
     const comp = buf.subarray(dataStart, dataStart + compSize)
+    const remaining = maxBytes - total
+    if (remaining <= 0) throw new Error(`zip: 解压后超过 ${maxBytes} 字节上限`)
     let data
-    if (method === 0) data = comp
-    else if (method === 8) data = inflateRawSync(comp)
+    if (method === 0) {
+      if (comp.length > remaining) throw new Error(`zip: ${name} 解压后超过 ${maxBytes} 字节上限`)
+      data = comp
+    } else if (method === 8) data = inflateBounded(comp, name, remaining, maxBytes)
     else { log(`zip: 跳过 ${name}（不支持的压缩方式 ${method}）`); continue }
     const target = safeJoin(destDir, name)
     if (!target) { log(`zip: 跳过可疑路径 ${name}`); continue }
     mkdirSync(path.dirname(target), { recursive: true })
     writeFileSync(target, data)
+    total += data.length
     made++
   }
   return made
@@ -369,22 +403,55 @@ function runTar(args) {
   }
 }
 
+// What a finished extraction actually produced. The system tar is a subprocess with no ceiling of
+// its own, so the tree is measured after it runs and the caller drops the staging directory
+// instead of installing a decompression bomb.
+function treeBytes(dir: string): number {
+  let total = 0
+  const stack = [dir]
+  while (stack.length) {
+    const cur = stack.pop() as string
+    let entries
+    try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      const p = path.join(cur, entry.name)
+      if (entry.isDirectory()) stack.push(p)
+      else if (entry.isFile()) { try { total += statSync(p).size } catch {} }
+    }
+  }
+  return total
+}
+
+function withinBudget(destDir: string, limits: ExtractLimits, log: (msg: string) => void): boolean {
+  const maxBytes = limits.maxBytes ?? MAX_EXTRACT_BYTES
+  const total = treeBytes(destDir)
+  if (total > maxBytes) {
+    log(`解压后 ${total} 字节，超过 ${maxBytes} 字节上限`)
+    return false
+  }
+  return true
+}
+
 // Extract whichever archive the release shipped: .zip, .tar.zst, .tar.gz. The system bsdtar
 // reads zip and (with libzstd) tar.zst; Node's zstd fills in on Linux where GNU tar would need
 // an external zstd, and the built-in ZIP reader is the last resort.
-export function extractArchive(file: string, destDir: string, log: (msg: string) => void = () => {}): boolean {
+export function extractArchive(file: string, destDir: string, log: (msg: string) => void = () => {}, limits: ExtractLimits = {}): boolean {
   const lower = String(file).toLowerCase()
   mkdirSync(destDir, { recursive: true })
   if (lower.endsWith(".zip")) {
-    if (runTar(["-xf", file, "-C", destDir])) return true
+    if (runTar(["-xf", file, "-C", destDir])) return withinBudget(destDir, limits, log)
     log("zip: tar 解压失败，改用内置解压")
-    try { extractZip(readFileSync(file), destDir, log); return true } catch (err: any) { log(`zip: 内置解压失败（${err.message}）`); return false }
+    try {
+      extractZip(readFileSync(file), destDir, log, limits)
+      return withinBudget(destDir, limits, log)
+    } catch (err: any) { log(`zip: 内置解压失败（${err.message}）`); return false }
   }
   if (lower.endsWith(".tar.zst") || lower.endsWith(".tzst")) {
     const out = file.replace(/\.(tar\.zst|tzst)$/i, ".tar")
     try {
-      writeFileSync(out, zstdDecompressSync(readFileSync(file)))
-      return runTar(["-xf", out, "-C", destDir])
+      const maxBytes = limits.maxBytes ?? MAX_EXTRACT_BYTES
+      writeFileSync(out, zstdDecompressSync(readFileSync(file), { maxOutputLength: Math.min(maxBytes, 0x7fffffff) }))
+      return runTar(["-xf", out, "-C", destDir]) && withinBudget(destDir, limits, log)
     } catch (err: any) {
       log(`tar.zst: 解压失败（${err.message}）`)
       return false
@@ -392,8 +459,8 @@ export function extractArchive(file: string, destDir: string, log: (msg: string)
       try { rmSync(out, { force: true }) } catch {}
     }
   }
-  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) return runTar(["-xzf", file, "-C", destDir])
-  if (lower.endsWith(".tar")) return runTar(["-xf", file, "-C", destDir])
+  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) return runTar(["-xzf", file, "-C", destDir]) && withinBudget(destDir, limits, log)
+  if (lower.endsWith(".tar")) return runTar(["-xf", file, "-C", destDir]) && withinBudget(destDir, limits, log)
   log(`不认识的压缩格式：${path.basename(file)}`)
   return false
 }

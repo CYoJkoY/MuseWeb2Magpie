@@ -146,6 +146,19 @@
     `writeSync`，内存不再随压缩包大小增长，一个只滴字节的响应变成带原因的拒绝而不是占满磁盘。
     测试见 `test/fingerprint.test.ts`。设计见
     [`docs/adr/0013-bounded-downloads.md`](docs/adr/0013-bounded-downloads.md)。
+22. **解压出来的大小也有上限。** 上一道界限管的是下载到的字节数，不是它解开后的大小：
+    `extractZip()` 原本用 `inflateRawSync(comp)` 逐个条目解压，`.tar.zst` 用
+    `zstdDecompressSync()`，系统 `tar` 则是没有任何上限的子进程。一个 512 MiB 的全零压缩包
+    能解出几百 GB——内置读取器会在写盘之前把每一个字节都拿在内存里，tar 路径则一直写到卷满。
+    现在 `engine/fingerprint.ts` 新增 `MAX_EXTRACT_BYTES`（2 GiB，真实 Chromium 远小于此）与
+    `MAX_ARCHIVE_ENTRIES`（100,000）两个唯一的界限：`extractZip()` 一边写一边累计，stored
+    条目超过剩余预算直接拒绝，deflated 条目把剩余预算作为 `maxOutputLength` 交给
+    `inflateRawSync`（zlib 的 `ERR_BUFFER_TOO_LARGE` 转成同一条「超过上限」的原因），中央目录
+    声称的条目数超限时在循环开始前就被拒；`zstdDecompressSync` 同样带 `maxOutputLength`，解不
+    下时连中间的 `.tar` 都不会写出来。系统 `tar` 没有可传的上限，所以 `treeBytes()` 在解压
+    完成后统计实际产物，超预算就报失败，调用方原有的清理会丢掉整个 staging 目录。测试见
+    `test/fingerprint.test.ts`。设计见
+    [`docs/adr/0014-bounded-extraction.md`](docs/adr/0014-bounded-extraction.md)。
 
 ## 已知残留风险
 
