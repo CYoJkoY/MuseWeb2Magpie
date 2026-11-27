@@ -3,7 +3,7 @@
 // engine/driver.ts; everything that can be decided from HTTP alone lives here, so the process that
 // owns the port needs no browser of its own to start answering.
 import { timingSafeEqual } from "node:crypto"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, realpathSync } from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
@@ -281,9 +281,29 @@ async function sameEngine(port: number, key: string): Promise<boolean> {
   }
 }
 
-// Start only when this file is the process entry point, so a test can import newHTTPServer without
-// binding a port.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Whether this file is the process entry point, so a test can import newHTTPServer without binding
+// a port. argv[1] is the path as the caller typed it: on Windows the same file may arrive with
+// another letter case, and a short or symlinked path names it just as well. Comparing the resolved
+// paths and then the real ones is what makes `node engine\MAIN.TS` start the engine instead of
+// silently doing nothing and exiting 0.
+export function sameEntryPath(a: string, b: string, platform = process.platform): boolean {
+  return platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+function isEntryPoint(): boolean {
+  const entry = process.argv[1]
+  if (!entry) return false
+  const same = sameEntryPath
+  const self = fileURLToPath(import.meta.url)
+  if (same(path.resolve(entry), self)) return true
+  try {
+    return same(realpathSync(path.resolve(entry)), realpathSync(self))
+  } catch {
+    return false
+  }
+}
+
+if (isEntryPoint()) {
   run().catch((err: any) => {
     process.stderr.write(redact(err?.message || String(err)) + "\n")
     process.exit(1)

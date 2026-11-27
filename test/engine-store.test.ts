@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { healthProof, validNonce } from "../engine/health.ts"
 import { loginPage } from "../engine/login-page.ts"
+import { sameEntryPath } from "../engine/main.ts"
 import { dataDir, DEFAULT_PORT, engineKey, enginePort, writePrivate } from "../engine/paths.ts"
 import { redact } from "../engine/redact.ts"
 import { generationCode } from "../engine/server.ts"
@@ -171,6 +172,14 @@ describe("the small helpers", () => {
     assert.ok(!loginPage(state).includes("<script>"), "unescaped login error")
     assert.ok(!loginPage({ status: "failed", error: "<script>x</script>" }).includes("<script>"))
     assert.ok(loginPage(null).includes("找不到这次登录"))
+  })
+
+  test("the engine recognises itself as the entry point however its path was typed", () => {
+    // A Windows path is the same file in any case, so `node engine\MAIN.TS` has to start the
+    // engine rather than do nothing and exit 0. Anywhere else the name is the file.
+    assert.equal(sameEntryPath("E:\\repo\\engine\\MAIN.TS", "e:\\repo\\engine\\main.ts", "win32"), true)
+    assert.equal(sameEntryPath("/repo/engine/MAIN.TS", "/repo/engine/main.ts", "linux"), false)
+    assert.equal(sameEntryPath("/repo/engine/main.ts", "/repo/engine/main.ts", "linux"), true)
   })
 })
 

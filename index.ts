@@ -50,6 +50,14 @@ function current(version) {
   return true
 }
 
+// Node runs .ts directly from 22.18 on, where stripping type annotations stopped being opt-in. An
+// older runtime ends the engine at its first type-only import, so the engine is not started at all
+// and the person is told which Node to install instead of being left with a timeout.
+function runsTypeScript() {
+  const [major, minor] = process.versions.node.split(".").map(Number)
+  return major > 22 || (major === 22 && minor >= 18)
+}
+
 function originFrom(value) {
   return String(value).trim().replace(/\/+$/, "").replace(/\/v1$/, "")
 }
@@ -198,6 +206,9 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
       if (!named && !existsSync(ENGINE_ENTRY)) {
         throw new Error(`muse-web 引擎入口缺失：${ENGINE_ENTRY}（插件安装不完整，请重新安装 magpie-muse-web）`)
       }
+      if (!named && !runsTypeScript()) {
+        throw new Error(`muse-web 引擎需要 Node >=22.18 才能直接运行 TypeScript，当前是 ${process.versions.node}；请升级 Node，或用 MUSE_WEB_ENGINE_BIN 指向一个原生引擎`)
+      }
       const child = spawn(named || process.execPath, named ? [] : [ENGINE_ENTRY], {
         detached: true,
         stdio: "ignore",
@@ -211,12 +222,18 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
       })
       child.on("error", () => {})
       child.unref()
+      // The child's own stderr is not kept, so an engine that dies on startup would otherwise only
+      // show up as the start window running out. Its exit is the one fact that says so directly.
+      let exited = ""
+      child.on("exit", (code, signal) => { exited = signal || String(code) })
       const end = Date.now() + ENGINE_START_MS
       while (Date.now() < end) {
         await sleep(300)
         const started = await inspect()
         if (started.ours && current(started.version)) return true
+        if (exited) break
       }
+      if (exited) trouble = `muse-web 引擎启动后立刻退出（${exited}）；日志在数据目录的 engine.log`
       return false
     })().then((ok) => {
       if (ok) checkedAt = Date.now()
