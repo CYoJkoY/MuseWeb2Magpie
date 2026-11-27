@@ -437,7 +437,11 @@ func (e *engine) route(res *response, r *http.Request, m *meta) error {
 }
 
 func (e *engine) handleHealth(res *response, r *http.Request, m *meta, param string) error {
-	body := map[string]any{"ok": true, "engine": engineName, "version": version, "accounts": e.store.Count()}
+	// The answer stays deliberately thin: this endpoint is unauthenticated, so any local user can
+	// ask it. "An engine is up and which version" is what a caller needs to decide what to do; how
+	// many accounts live in this data directory is not, and the count is behind the key at
+	// /v1/accounts.
+	body := map[string]any{"ok": true, "engine": engineName, "version": version}
 	// A caller may ask the port to prove it holds engine.key: it sends a nonce and gets back an
 	// HMAC it can check locally. Without the challenge nothing extra is revealed, and the key
 	// itself is never part of the answer.

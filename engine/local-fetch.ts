@@ -16,6 +16,18 @@ export function isLoopbackUrl(value: unknown): boolean {
   }
 }
 
+// engine.key and account handles are credentials. They may travel in the clear only to this
+// machine; anywhere else the carrier has to be https, so a plain-http LAN address cannot receive
+// them just because someone typed it into MUSE_WEB_ENGINE (or an agent's environment did).
+export function credentialSafeUrl(value: unknown): boolean {
+  if (isLoopbackUrl(value)) return true
+  try {
+    return new URL(String(value)).protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
 function abortError(signal: any) {
   if (signal?.reason instanceof Error) return signal.reason
   return Object.assign(new Error("This operation was aborted"), { name: "AbortError" })

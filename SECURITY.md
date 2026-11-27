@@ -41,8 +41,13 @@
    DevTools WebSocket 握手，所以账号资料目录里加载的任何网页都连不上 CDP；引擎自己的客户端是不发
    `Origin` 的 WebSocket，仍然能连。`test/engine.test.ts` 守着这条参数，`test/bundled.test.ts`
    在真实浏览器上跑通整条链路。
-6. **请求体有上限，头部有时间上限。** `readBody` 用 `http.MaxBytesReader`（8 MB）并把超限映射成
-   413 `request_too_large`；`http.Server` 设了 `ReadHeaderTimeout` 与 `MaxHeaderBytes`。
+6. **请求体有上限，读请求有时间上限。** `readBody` 用 `http.MaxBytesReader`（8 MB）并把超限映射成
+   413 `request_too_large`；`http.Server` 由 `newHTTPServer()` 一处构造，设了 `ReadHeaderTimeout`、
+   `ReadTimeout`（30 秒，头与体一起计时）和 `MaxHeaderBytes`（32 KB），没有 `WriteTimeout`（会截断
+   SSE 流）。`ReadTimeout` 让一个只慢慢滴字节、迟迟不结束的请求无法长期占住进程——本机任何
+   用户都能连上端口，未带密钥的请求在读到正文之前就被拒，但连接本身仍可能被拖住，这条给它一个
+   截止时间。`engine-go/server_test.go`
+   的 `TestHTTPServerSetsItsLimits` 守住这些上限。
 7. **响应不可被猜测和缓存。** 所有响应都带 `x-content-type-options: nosniff`，没有自己指定
    `cache-control` 的响应默认 `no-store`（SSE 流保留 `no-cache`）。
 8. **登录进度页是最小权限的静态页。** `/login/<id>` 用 `html/template` 转义，只带随机登录 ID，
@@ -64,6 +69,15 @@
     rebinding 的页面到达端口时仍带着自己的域名，这条检查让未来任何免鉴权 GET（health、登录
     进度页）都不会变成网页可读的答案。`engine-go/server_test.go` 的
     `TestHostHeaderMustBeLoopback` 守住这条。
+13. **凭据只在回环或 https 上传输。** `engine.key` 和账号句柄是凭据。插件指向一个外部引擎
+    （`MUSE_WEB_ENGINE` / `engine` 选项）时，`engine/local-fetch.ts` 的 `credentialSafeUrl()` 只在
+    目标是本机回环地址或 `https:` 时才允许发送它们；一个明文 http 的局域网 / 域名地址——无论是
+    有人手输进环境变量，还是某个 Agent 的环境带进来的——都会被直接拒绝，插件在探测前就返回
+    「引擎连不上」并说明必须用 https 或 127.0.0.1，连接根本不会建立。`test/engine-origin.test.ts`
+    钉住允许与拒绝的集合，以及「被拒的地址一字节密钥都收不到」。
+14. **`/v1/health` 只回答最少的信息。** 这是免鉴权端点，任何本机用户都能问，所以它只说「引擎在、
+    哪个版本」，不再返回账号数（账号数在密钥之后的 `/v1/accounts`）。`engine-go/server_test.go`
+    的 `TestHealthDoesNotCountAccounts` 守住这条。
 
 ## 已知残留风险
 
@@ -101,3 +115,8 @@ design, and upstream error text may still contain ordinary strings. Please repor
 cookies, `engine.key`, or unscrubbed logs.
 The Host header must address 127.0.0.1 or localhost; anything else gets 403 `host_not_allowed`
 before routing, so DNS-rebound pages cannot read even the unauthenticated answers.
+Credentials (`engine.key` and account handles) ride the wire only to loopback or over `https:`: a
+plugin pointed at a named engine on a plain-http address other than this machine refuses to send
+them and reports the transport rule instead. `/v1/health` says only that an engine is up and its
+version — not how many accounts live behind the key — and the listener sets a request `ReadTimeout`
+so a trickling body cannot pin the process.

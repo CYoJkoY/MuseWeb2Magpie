@@ -120,7 +120,9 @@ describe("Go engine over HTTP", { skip: existsSync(BINARY) ? false : `missing ${
     assert.equal(health.status, 200)
     assert.equal(health.body.engine, "muse-web")
     assert.equal(health.body.version, "0.11.0")
-    assert.equal(health.body.accounts, 3)
+    // The unauthenticated answer says only that an engine is up and which version; the account
+    // count lives behind the key at /v1/accounts.
+    assert.equal(health.body.accounts, undefined)
     // Without a challenge the port reveals no proof.
     assert.equal(health.body.proof, undefined)
     // A challenge makes the port prove it holds engine.key; the same HMAC the TypeScript side computes.

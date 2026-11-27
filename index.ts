@@ -6,7 +6,7 @@ import { dataDir, enginePort } from "./engine/paths.ts"
 import { browserOptions } from "./engine/browser.ts"
 import { findFingerprintBrowser, findWayfernBrowser, isWayfernBrowser } from "./engine/fingerprint.ts"
 import { CHALLENGE_HEADER, healthChallenge, provesHealth } from "./engine/health.ts"
-import { anyFetch } from "./engine/local-fetch.ts"
+import { anyFetch, credentialSafeUrl } from "./engine/local-fetch.ts"
 import { VERSION } from "./engine/version.ts"
 
 const PROVIDER = "muse-web"
@@ -82,8 +82,16 @@ function structured(windows: any): any[] {
 export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
   const opt = options && typeof options === "object" ? options : {}
   // An engine named in options or MUSE_WEB_ENGINE is run by someone else; otherwise the plugin runs its own.
-  const external = () => Boolean(opt.engine || process.env.MUSE_WEB_ENGINE)
-  const engineOrigin = () => originFrom(opt.engine || process.env.MUSE_WEB_ENGINE || `http://127.0.0.1:${enginePort()}`)
+  const namedEngine = () => String(opt.engine || process.env.MUSE_WEB_ENGINE || "").trim()
+  const external = () => Boolean(namedEngine())
+  const engineOrigin = () => originFrom(namedEngine() || `http://127.0.0.1:${enginePort()}`)
+  // Why a named engine may not be used, or "" when it may. The engine key and every account
+  // handle are credentials, so they only travel in the clear to loopback; a named engine on
+  // another machine has to be https.
+  const originTrouble = () => {
+    if (!external() || credentialSafeUrl(engineOrigin())) return ""
+    return `引擎地址 ${engineOrigin()} 既不是本机回环地址，也不是 https。engine.key 和账号句柄只会发给回环或 https 端口；请改用 https，或让引擎跑在 127.0.0.1。`
+  }
   const engineBaseURL = () => `${engineOrigin()}/v1`
   const engineKey = () => {
     const own = String(opt.key ?? process.env.MUSE_WEB_ENGINE_KEY ?? "").trim()
@@ -101,6 +109,8 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
   // engine.key can make. A squatter that binds the port first answers in the engine's name but
   // cannot produce the proof, so it is never treated as ours and never handed the key.
   async function inspect(): Promise<{ version: string; ours: boolean; answered: boolean }> {
+    // An origin we will never hand a credential to is not worth probing.
+    if (originTrouble()) return { version: "", ours: false, answered: false }
     const nonce = healthChallenge()
     try {
       const res = await anyFetch(`${engineOrigin()}/v1/health`, {
@@ -130,15 +140,16 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
 
   // True only when the port at engineOrigin() is one we may send engine.key and account handles to.
   async function ours() {
-    if (external()) return true
+    if (external()) return originTrouble() === ""
     if (Date.now() - verifiedAt < 30_000) return true
     return (await inspect()).ours
   }
 
   // Why the engine cannot be reached, in terms a person can act on.
   function downMessage() {
-    return trouble
-      ? `muse-web 引擎连不上：${trouble}`
+    const why = originTrouble() || trouble
+    return why
+      ? `muse-web 引擎连不上：${why}`
       : "muse-web 引擎没有启动；日志在数据目录的 engine.log"
   }
 

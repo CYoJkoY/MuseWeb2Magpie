@@ -264,3 +264,62 @@ func TestDriverIsNotSpawnedByHTTP(t *testing.T) {
 	}
 }
 
+// TestHealthDoesNotCountAccounts pins the thinness of the unauthenticated answer: any local user
+// can read it, so it says an engine is up and which version, and nothing about the accounts
+// behind the key.
+func TestHealthDoesNotCountAccounts(t *testing.T) {
+	e := newTestEngine(t)
+	if _, err := e.store.Add(map[string]string{"hatch_sess": "s"}, nil, "someone@example.test", ""); err != nil {
+		t.Fatal(err)
+	}
+	rec := call(e, request(http.MethodGet, "/v1/health", "127.0.0.1:18611"))
+	if rec.Code != 200 {
+		t.Fatalf("health status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["accounts"]; ok {
+		t.Errorf("unauthenticated health answer counts accounts: %v", body)
+	}
+	if body["engine"] != engineName {
+		t.Errorf("health engine = %v, want %q", body["engine"], engineName)
+	}
+	if body["version"] != version {
+		t.Errorf("health version = %v, want %q", body["version"], version)
+	}
+	// The count is still available where it belongs: behind the key.
+	r := request(http.MethodGet, "/v1/accounts", "127.0.0.1:18611")
+	r.Header.Set("authorization", "Bearer "+e.cfg.key)
+	var listed struct {
+		Accounts []map[string]any `json:"accounts"`
+	}
+	if err := json.Unmarshal(call(e, r).Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Accounts) != 1 {
+		t.Errorf("/v1/accounts lists %d accounts, want 1", len(listed.Accounts))
+	}
+}
+
+// TestHTTPServerSetsItsLimits pins the listener's limits, including the request deadline that
+// keeps a trickling body from pinning the process — and the absence of a write deadline, which
+// would cut a streaming answer short.
+func TestHTTPServerSetsItsLimits(t *testing.T) {
+	s := newHTTPServer(nil)
+	if s.ReadHeaderTimeout <= 0 || s.ReadTimeout <= 0 || s.IdleTimeout <= 0 || s.MaxHeaderBytes <= 0 {
+		t.Errorf("unbounded server: header=%v read=%v idle=%v maxHeader=%d",
+			s.ReadHeaderTimeout, s.ReadTimeout, s.IdleTimeout, s.MaxHeaderBytes)
+	}
+	if s.ReadTimeout > 2*time.Minute {
+		t.Errorf("read timeout %v is long enough to be a pin", s.ReadTimeout)
+	}
+	if s.WriteTimeout != 0 {
+		t.Errorf("write timeout %v would cut streaming answers", s.WriteTimeout)
+	}
+	if s.MaxHeaderBytes > 1<<20 {
+		t.Errorf("header limit %d is far above the 32 KB the engine expects", s.MaxHeaderBytes)
+	}
+}
+

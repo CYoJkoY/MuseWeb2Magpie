@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 安全：凭据（`engine.key` 与账号句柄）只在回环或 `https` 上传输。插件指向外部引擎（`MUSE_WEB_ENGINE` / `engine` 选项）时，新增的 `credentialSafeUrl()` 只在目标是本机回环或 `https:` 时才允许发送；明文 http 的局域网 / 域名地址（无论是手输还是某个 Agent 的环境带入）在探测前就被拒绝，插件报「引擎连不上」并说明要用 https 或 `127.0.0.1`，连接不会建立。新增 `test/engine-origin.test.ts` 钉住允许 / 拒绝集合与被拒地址「一字节密钥都收不到」。设计见 `docs/adr/0006-credentials-over-the-wire.md`，`SECURITY.md` 不变量增到十四条。
+- 安全：免鉴权的 `/v1/health` 不再返回账号数——任何本机用户都能问它，现在只说「引擎在、哪个版本」，账号数留在密钥之后的 `/v1/accounts`。新增 Go 测试 `TestHealthDoesNotCountAccounts` 守住这条，`test/go-engine.test.ts` 相应断言 health 不再带 `accounts`。
+- 变更：引擎监听器的超时与上限收敛到一处构造（`main.go` 的 `newHTTPServer()`），新增 `ReadTimeout`（30 秒，头与体一起计时）——一个只滴字节、迟迟不结束的请求再也无法长期占住进程；仍不设 `WriteTimeout` 以免截断 SSE 流。新增 `TestHTTPServerSetsItsLimits` 钉住各超时与头部上限。
 - 安全：引擎的 HTTP 层重构为显式路由表（`engine-go/server.go` 的 `routes()`）：每个端点一行，
   写明方法、路径、是否需要密钥和处理函数；`route()` 在进入任何 handler 前统一鉴权，「每个
   `/v1/*` 都要密钥」从「每个作者记得写」变成表里声明的一行，新增 `engine-go/server_test.go`

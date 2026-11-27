@@ -25,6 +25,13 @@ const version = "0.11.0"
 // its own tab, so a small pool keeps a large saved set from flooding the browser.
 const prewarmUsageParallel = 3
 
+// readTimeout bounds how long one request may take to arrive — headers and body together. Any
+// user on the machine can reach 127.0.0.1, and only this user can read engine.key; a request that
+// arrives without the key is rejected before its body is read, so a deadline on the body keeps a
+// connection that trickles bytes from pinning the process. Chat bodies are a few KB of JSON and
+// never come close; responses (SSE included) are not bounded by it.
+const readTimeout = 30 * time.Second
+
 type config struct {
 	dir         string
 	port        int
@@ -131,7 +138,7 @@ func run() error {
 			return nil, fmt.Errorf("unknown driver callback: %s", req)
 		}
 	}
-	server := &http.Server{Handler: e, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := newHTTPServer(e)
 	var stopOnce sync.Once
 	e.stop = func(why string) {
 		stopOnce.Do(func() {
@@ -272,6 +279,18 @@ func run() error {
 		return nil
 	}
 	return err
+}
+
+// newHTTPServer is the one place the loopback listener's limits are set, so a test can read them
+// instead of trusting a literal buried in run().
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+	}
 }
 
 // sameEngine reports whether the port is held by another engine that shares this data directory —
