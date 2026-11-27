@@ -2,12 +2,12 @@
 // starts on, the key that guards the port, and the small helpers the HTTP layer builds on.
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { healthProof, validNonce } from "../engine/health.ts"
 import { loginPage } from "../engine/login-page.ts"
-import { dataDir, DEFAULT_PORT, engineKey, enginePort } from "../engine/paths.ts"
+import { dataDir, DEFAULT_PORT, engineKey, enginePort, writePrivate } from "../engine/paths.ts"
 import { redact } from "../engine/redact.ts"
 import { generationCode } from "../engine/server.ts"
 import { Store } from "../engine/store.ts"
@@ -92,6 +92,16 @@ describe("the account store", () => {
     for (let i = 0; i < 12; i++) store.add({ hatch_sess: "a" }, {}, "", "")
     assert.equal(store.count(), 12)
     assert.equal(new Store(file).count(), 12)
+  })
+
+  test("a save that cannot land reports why and leaves no temporary file behind", () => {
+    const dir = tmp("mw-store-")
+    const file = path.join(dir, "accounts.json")
+    // A directory in the file's place makes the replace fail the way a locked file does, and the
+    // half-written temporary file must not survive the failure.
+    mkdirSync(file)
+    assert.throws(() => writePrivate(file, "{}\n"))
+    assert.deepEqual(readdirSync(dir), ["accounts.json"])
   })
 })
 
