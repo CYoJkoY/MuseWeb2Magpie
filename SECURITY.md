@@ -56,7 +56,10 @@
 9. **下载与解压都不信输入。** 指纹浏览器下载固定版本并校验 sha256，失败就回退或报错，不会安装
    未校验的文件；`engine/fingerprint.ts` 的内置 zip 读取器拒绝 `..` 和绝对路径条目。
 10. **不复用日常浏览器资料。** 登录窗口用临时资料目录，登录完成后删除；引擎浏览器各自独立，
-    也不读写 Donut Browser 自己的账号数据。
+    也不读写 Donut Browser 自己的账号数据。唯一的例外是被 muse.ai 解除关联的那次登录：窗口和
+    临时资料目录会保留到人关掉窗口或引擎停止，因为重新关联要填的「提交反馈」表单只存在于那个
+    窗口里（0.12.9，见 [`docs/adr/0020-unlinked-screen-handoff.md`](docs/adr/0020-unlinked-screen-handoff.md)）；
+    其余失败路径仍然立即删除。
 11. **端口先证明身份，才拿得到密钥。** `/v1/health` 仍然免鉴权（插件必须先问“在不在、哪个版本”），
     但调用方可以带 `x-muse-challenge: <nonce>`，引擎回 `proof = hex(HMAC-SHA256(engine.key,
     "muse-web-health:" + nonce))`。插件只有在 `proof` 与本地算出的值常量时间相等时，才会把
@@ -220,6 +223,10 @@
     醒或状态不符时不误判。驱动把它记为 `account_unlinked` 且不重试 `verify`，网关映射为 503 +
     `Retry-After: 3600`；账号保留，不因这个状态被删除。测试见 `test/unlinked.test.ts`，设计见
     [`docs/adr/0019-unlinked-workspace-diagnosis.md`](docs/adr/0019-unlinked-workspace-diagnosis.md)。
+    登录窗口在关掉之前先读它自己那一页（同一个调试端口的 `/json/list`，答复仍受 1 MiB 上限约束）；
+    看到「Muse已解除关联」就不关窗口，把可执行的步骤写在进度页上，因为那个窗口是唯一能提交工单
+    的地方。测试见 `test/unlinked-handoff.test.ts`，设计见
+    [`docs/adr/0020-unlinked-screen-handoff.md`](docs/adr/0020-unlinked-screen-handoff.md)。
 
 ## 已知残留风险
 
