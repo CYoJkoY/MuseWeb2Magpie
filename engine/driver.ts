@@ -103,8 +103,20 @@ const prewarm = env.MUSE_WEB_PREWARM !== "0"
 const verifyLogin = env.MUSE_WEB_VERIFY_LOGIN !== "0"
 
 let browserReady: Promise<any> | null = null
+// A fingerprint browser this machine turns out not to allow automation in is a fact about this
+// machine, not about the sign-in that met it. Once known, the sign-in window uses the system
+// browser too, instead of opening a window that can be signed into but never driven.
+let fingerprintRefused: { executable: string; said: string } | null = null
 function prepareBrowser() {
   browserReady ??= (async () => {
+    if (fingerprintRefused) {
+      if (fallbackExecutable) {
+        log(`browser: ${fallbackExecutable} (system，指纹浏览器不允许自动化)`)
+        return { executable: fallbackExecutable, extraArgs: [], source: "system", version: "" }
+      }
+      log(`browser: 指纹浏览器不允许自动化（${redact(fingerprintRefused.said)}），本机也没有 Chrome、Edge 或 Chromium`)
+      return null
+    }
     let picked: any = null
     try {
       picked = await ensureFingerprintBrowser({ dir, env, log, fetchImpl, exists: existsSync })
@@ -126,6 +138,15 @@ function prepareBrowser() {
   return browserReady
 }
 
+// Recorded the first time a browser refuses page script. Clearing the memo makes the next
+// prepareBrowser() answer with the system browser (or null) instead of choosing the same kernel.
+function refuseAutomation(executable: string, said: string) {
+  if (fingerprintRefused) return
+  fingerprintRefused = { executable, said }
+  browserReady = null
+  log(`browser: ${executable} 不允许自动化（${redact(said)}），改用系统中的 Chromium`)
+}
+
 const muse = new Muse({
   site,
   executable: fallbackExecutable,
@@ -137,6 +158,7 @@ const muse = new Muse({
   fetchImpl,
   onCookies: (id, cookies, exp, vm) => send({ ev: "cookies", handle: id, cookies, cookies_exp: exp, vm }),
   onLost: (why) => send({ ev: "lost", why }),
+  onAutomationRefused: refuseAutomation,
 })
 
 async function warmOne(account: any) {
@@ -196,13 +218,20 @@ const logins = new Logins({
         log(`${now()} verify account=${saved.handle} ${Date.now() - startedAt}ms`)
       } catch (err: any) {
         log(`${now()} verify account=${saved.handle} failed reason=${redact(err.message)}`)
-        if (!(err instanceof QuotaError)) {
+        // The cookies came from muse.ai and /api/session accepted them, so the account is signed
+        // in. Only muse.ai itself saying the session is gone makes it worthless; a test message
+        // that failed for any other reason (a slow page, a browser that cannot be driven, a quota)
+        // says the *message* failed, not the sign-in. Dropping the account there threw away a good
+        // sign-in and asked the person to do it again.
+        if (err instanceof AuthError) {
           if (!saved.again) {
             await muse.closeAccount(saved.handle).catch(() => {})
             await storeRequest("store.remove", { handle: saved.handle })
           }
-          throw new Error(`已登录，但账号没有回答测试消息：${err.message}`)
+          throw new Error(`已登录，但 muse.ai 说这个会话已经失效：${err.message}`)
         }
+        // Keep the account: the first real conversation tries again.
+        saved.warning = `已登录并保存；但没能用一条测试消息确认它能回答（${redact(err.message)}），第一条对话会再试`
       }
     }
     if (prewarm) warm([saved.handle]).catch(() => {})

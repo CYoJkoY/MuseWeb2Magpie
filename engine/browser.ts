@@ -165,6 +165,60 @@ export function pageUrl(value: unknown, port: number): string | null {
   return endpointUrl(value, port, "/devtools/page/")
 }
 
+// A kernel that ships inside another browser (Donut Browser's Wayfern, on its free plan) opens a
+// window and serves CDP, but refuses the one call every page in this engine needs:
+// Runtime.evaluate. Signing in still looks like a success — it only reads cookies and navigates —
+// so the refusal used to surface much later, as a chat page that never became ready, and the
+// account was thrown away as if the session were bad. Recognise the refusal by what it says.
+export const AUTOMATION_REFUSED = /requires a paid\b[^.]*\bplan|browser automation (?:is )?(?:not )?(?:allowed|available|enabled|permitted)/i
+
+export function automationRefused(said: unknown): boolean {
+  return AUTOMATION_REFUSED.test(String(said || ""))
+}
+
+// The cheapest call this kind of kernel refuses. Returns the kernel's reason when it refuses and
+// "" when the page answers — or when it fails for a reason that is not a policy refusal (a
+// navigation still loading is not a licence problem, and must not send the engine looking for
+// another browser).
+export async function pageRefusal(page: { send(method: string, params?: any, timeoutMs?: number): Promise<any> }): Promise<string> {
+  try {
+    await page.send("Runtime.evaluate", { expression: "1", returnByValue: true }, 15_000)
+    return ""
+  } catch (err: any) {
+    const said = String(err?.message || err)
+    return automationRefused(said) ? said.replace(/^Runtime\.evaluate:\s*/, "") : ""
+  }
+}
+
+// Asks a just-started browser whether it will run page script. A browser opens its window on
+// about:blank or the configured site, but the page target can appear a moment after the debugger
+// port answers, so this waits a short, bounded time for one. An empty answer means "can be
+// driven"; a launch that never offers a page is left to the engine's own load timeout.
+export async function launchRefusal(browser: CDP, port: number, waitMs = 5_000): Promise<string> {
+  const end = Date.now() + waitMs
+  let address: string | null = null
+  while (!address && Date.now() < end) {
+    try {
+      const list: unknown = await httpJSON(`http://127.0.0.1:${port}/json/list`, 2_000)
+      const pages = Array.isArray(list) ? list.filter((t: any) => t && t.type === "page") : []
+      address = pages.map((t: any) => pageUrl(t.webSocketDebuggerUrl, port)).find(Boolean) ?? null
+    } catch {
+      address = null
+    }
+    if (!address) await new Promise<void>((r) => setTimeout(r, 250))
+  }
+  if (!address) return ""
+  let page: CDP | null = null
+  try {
+    page = await CDP.connect(address)
+    return await pageRefusal(page)
+  } catch {
+    return ""
+  } finally {
+    page?.close()
+  }
+}
+
 // proxy: "" leaves the browser on the system's own setting, "direct" ignores it, a URL forces it.
 // hidden: a real window placed off-screen, for sites that treat headless differently.
 // extraArgs: flags only one browser understands (Apostate's --fingerprint), left empty for Chrome.

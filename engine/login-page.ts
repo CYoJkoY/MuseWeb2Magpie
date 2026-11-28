@@ -21,7 +21,12 @@ export function loginPage(raw: unknown): string {
   let note = ""
   if (done) {
     title = "登录完成"
-    note = "可以关掉这个页面，回到 Magpie。"
+    // A sign-in can succeed while the test message that confirms it could not be sent: the account
+    // is saved either way, and the first conversation tries again, so say what is unconfirmed
+    // instead of a clean "done" that hides it.
+    note = state?.warning
+      ? `${String(state.warning)}。可以关掉这个页面，回到 Magpie。`
+      : "可以关掉这个页面，回到 Magpie。"
   } else if (failed) {
     title = "登录没有完成"
     note = state?.error || "找不到这次登录，请回到 Magpie 重新发起。"

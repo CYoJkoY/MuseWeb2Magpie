@@ -1,5 +1,24 @@
 # 更新记录
 
+## 0.12.7 · 2026-11-28
+
+- 修复：在 Donut Browser 的 Wayfern 内核（免费版）里完成 muse.ai 登录后，进度页一直停在
+  「请到另一个浏览器窗口登录 muse.ai … 已领到会话，正在发一条测试消息确认账号能回答」，
+  登录状态也不再更新，账号甚至被删掉。真因是该内核会把窗口开起来、也提供 CDP，但拒绝
+  `Runtime.evaluate`（回复 `Browser automation requires a paid Donut Browser plan.`），而引
+  擎整套页面操作都靠它；登录窗口只读 cookie、只导航，所以看起来成功了，故障要到聊天页时
+  才出现，并且被 `.catch(() => "")` 吞成一句「页面加载超时」。
+- 修复：`engine/muse.ts` 启动浏览器后会先用一次 `Runtime.evaluate` 探测它能不能被驱动；被拒
+  绝就关掉它、记住这个事实，改用系统里的 Chrome/Edge/Chromium 重开一次，并通知驱动；两个
+  都拒绝时给出可行动的中文错误（安装 Chrome/Edge/Chromium，或用 `MUSE_WEB_CHROME` 指定）。
+  `engine/driver.ts` 记住这次拒绝后，登录窗口也改用系统浏览器，不再开一个能登录却操作不了
+  的窗口。
+- 修复：只有 muse.ai 自己否认会话（`AuthError`）才删除账号；测试消息因别的原因（页面慢、
+  浏览器不能自动化、额度）没成功时保留账号，并在进度页显示「已登录并保存，但没能确认，
+  第一条对话会再试」的提示，而不是把一次成功的登录当成坏账号丢掉。
+- 测试：新增 `test/browser-refusal.test.ts`，覆盖拒绝文案识别、`pageRefusal()` 的三种回答、
+  `Muse.start()` 在注入的探测失败时改用系统浏览器并触发回调、以及进度页显示未确认警告。
+
 ## 0.12.6 · 2026-11-28
 
 - 变更：插件在 Magpie 里的行名改为 `MuseWeb2Magpie`（`package.json` 的 `magpie.name`）。npm 包名
