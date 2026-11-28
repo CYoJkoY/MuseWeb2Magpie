@@ -28,6 +28,8 @@ export interface SavedAccount {
   handle: string
   expires: number | null
   label: string
+  // Set when the session was saved but a test message could not confirm it answers yet.
+  warning?: string
   again?: boolean
   account?: Account
 }

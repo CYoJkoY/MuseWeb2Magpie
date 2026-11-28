@@ -277,7 +277,7 @@ export const MuseWebPlugin = async (_input: any = {}, options: any = {}) => {
     const { id, url } = await res.json() as any
     return {
       url,
-      instructions: "在弹出的浏览器窗口里登录 muse.ai。优先复用本机 Donut Browser 的 Wayfern 内核；没有时会下载开源指纹浏览器 Apostate，窗口会晚一点出现。登录后窗口自动关闭，引擎再发一条测试消息，账号能回答才算登录成功。",
+      instructions: "在弹出的浏览器窗口里登录 muse.ai。优先复用本机 Donut Browser 的 Wayfern 内核；没有时会下载开源指纹浏览器 Apostate，窗口会晚一点出现。登录后窗口自动关闭，引擎再发一条测试消息确认账号能回答；万一确认不了，账号也会先保存，第一条对话会再试。",
       method: "auto",
       async callback() {
         const end = Date.now() + LOGIN_LIMIT_MS

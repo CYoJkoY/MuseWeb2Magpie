@@ -221,7 +221,7 @@ export class Logins {
           run.step = "已领到会话，正在发一条测试消息确认账号能回答"
           try {
             const saved = await this.onDone(renewed.cookies, renewed.cookies_exp, renewed.label, renewed.vm)
-            finish({ status: "done", handle: saved.handle, expires: saved.expires, label: saved.label })
+            finish({ status: "done", handle: saved.handle, expires: saved.expires, label: saved.label, warning: saved.warning })
           } catch (err: any) {
             finish({ status: "failed", error: err.message })
           }
@@ -249,11 +249,12 @@ export class Logins {
   status(id: string): any {
     const run = this.runs.get(id)
     if (!run) return null
-    const { status, step, note, handle, expires, label, error } = run
+    const { status, step, note, handle, expires, label, warning, error } = run
     return {
       status,
       ...((status === "pending" || status === "starting") ? { step, ...(note ? { note } : {}) } : {}),
       ...(handle ? { handle, expires, label } : {}),
+      ...(warning ? { warning } : {}),
       ...(error ? { error } : {}),
     }
   }

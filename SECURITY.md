@@ -197,6 +197,20 @@
     传给它；`MUSE_WEB_ACCEPT_TERMS=0`、`off`、`no`、`false` 可以关闭自动接受。接受失败时的
     错误包含可复制的可执行文件路径和命令。测试见 `test/wayfern-terms.test.ts`，设计见
     [`docs/adr/0017-browser-terms-once.md`](docs/adr/0017-browser-terms-once.md)。
+25. **能不能驱动浏览器是启动后先问清的事，账号只由 muse.ai 自己判定失效。** 一个内嵌内核
+    （Donut Browser 免费版的 Wayfern）会把窗口开起来、也提供调试端口，却拒绝 `Runtime.evaluate`
+    ——而引擎的每一次页面操作都靠它。登录窗口只读 cookie、只导航，所以看起来是成功的；故障
+    到聊天页才出现，还会被页面读取里的兜底吞成「页面加载超时」，账号随后被当坏账号删掉。
+    现在 `engine/muse.ts` 在启动后先用一次 `Runtime.evaluate` 探测（`engine/browser.ts` 的
+    `launchRefusal()` / `pageRefusal()` / `automationRefused()`），只有内核对自动化的明确拒绝
+    才触发回退，其它失败（导航未完成、连接超时）不会被误判；被拒的浏览器立刻关闭，引擎改用
+    `this.executable`（驱动传入的系统浏览器，来自 `findBrowser()`）重开一次，并记住这个内核，
+    后续启动不再在它身上浪费时间。两份浏览器都拒绝时抛出可行动的错误。
+    登录完成后的测试消息只用来「确认能回答」，不是登录是否成立的判据：cookie 来自 muse.ai，
+    `/api/session` 已经接受，所以只有 `AuthError`（muse.ai 说会话已失效）才删除账号；其它原因
+    （页面慢、不能自动化、额度）保留账号，进度页给出「已保存但不确认，第一条对话会再试」的
+    警告。测试见 `test/browser-refusal.test.ts`，设计见
+    [`docs/adr/0018-browser-that-can-be-driven.md`](docs/adr/0018-browser-that-can-be-driven.md)。
 
 ## 已知残留风险
 

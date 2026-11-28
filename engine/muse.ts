@@ -5,7 +5,7 @@
 // first-token wait, raised from 40 s to 90 s after cold starts were measured at 30–47 s.
 import { randomUUID } from "node:crypto"
 import { CDP } from "./cdp.ts"
-import { launchBrowser } from "./browser.ts"
+import { launchBrowser, launchRefusal } from "./browser.ts"
 import { ESSENTIAL, expiryMs } from "./accounts.ts"
 import { redact } from "./redact.ts"
 import type { Account, Cookies, ExpiryMap, Meter, UsageCard, UsageReading } from "./types.ts"
@@ -460,6 +460,15 @@ const USAGE_RETRY_MS = 2 * 60_000
 const VERIFY = "\u0000verify"
 const VERIFY_PROMPT = "这是一条连通测试，请只回复：OK"
 
+// A kernel that will not run page script is a browser this engine cannot use at all, and the
+// kernel's own sentence is the only proof it is a licence limit rather than a broken install. Name
+// the fix instead of leaving a person with "页面加载超时".
+export function refusalProblem(executable: string, said: string): string {
+  return `这个浏览器内核不允许自动化（${redact(said)}），引擎无法在它里面操作 muse.ai 页面。`
+    + `请安装 Chrome、Edge 或 Chromium，或用 MUSE_WEB_CHROME 指定一个能自动化的浏览器`
+    + (executable ? `（当前用的是 ${executable}）` : "")
+}
+
 export interface MuseOptions {
   site?: string
   executable?: string
@@ -477,6 +486,14 @@ export interface MuseOptions {
   loadMs?: number
   onCookies?: (id: string, cookies: Cookies, exp: ExpiryMap, vm: string) => void
   onLost?: (why: string) => void
+  // Called once per browser that turns out to refuse page script, so the driver can stop choosing
+  // it for the sign-in window too.
+  onAutomationRefused?: (executable: string, said: string) => void
+  // Which browser to start. Separated from the import so a test can watch a start without a
+  // browser; the engine always uses launchBrowser.
+  launch?: (options: any) => Promise<any>
+  // Whether a started browser can run page script; empty means yes.
+  probeAutomation?: (launched: any) => Promise<string>
 }
 
 export type ChatTiming = { how?: string; sent?: string; tabMs?: number; firstMs?: number; text?: string }
@@ -496,6 +513,12 @@ export class Muse {
   stopQuietMs: number
   loadMs: number
   onCookies: (id: string, cookies: Cookies, exp: ExpiryMap, vm: string) => void
+  onAutomationRefused: (executable: string, said: string) => void
+  launch: (options: any) => Promise<any>
+  probeAutomation: (launched: any) => Promise<string>
+  // executable → the kernel's own reason. A capability of this machine, not of an account, so
+  // drop() leaves it alone: a restart must not pay the refusal's timeouts again.
+  refused: Map<string, string>
   accounts: Map<string, any>
   usage: Map<string, UsageReading>
   reading: Map<string, Promise<UsageReading | null> | Promise<never> | Promise<any>>
@@ -521,6 +544,9 @@ export class Muse {
     loadMs = 30_000,
     onCookies = () => {},
     onLost = () => {},
+    onAutomationRefused = () => {},
+    launch = launchBrowser,
+    probeAutomation = (launched) => launchRefusal(launched.browser, launched.port),
   }: MuseOptions) {
     this.onLost = onLost
     this.site = site.replace(/\/+$/, "")
@@ -538,6 +564,10 @@ export class Muse {
     this.stopQuietMs = stopQuietMs
     this.loadMs = loadMs
     this.onCookies = onCookies
+    this.onAutomationRefused = onAutomationRefused
+    this.launch = launch
+    this.probeAutomation = probeAutomation
+    this.refused = new Map()
     this.accounts = new Map()
     // account id → {at, plan, windows}; survives the browser closing, read again when it runs
     this.usage = new Map()
@@ -629,7 +659,7 @@ export class Muse {
   start() {
     if (this.started) return this.started
     const started = this.resolveLaunch()
-      .then(({ executable, extraArgs }) => launchBrowser({ ...this.opts, executable, extraArgs, temporary: true }))
+      .then(({ executable, extraArgs }) => this.open(executable, extraArgs))
       .then((b) => {
         const lost = (why) => {
           if (this.started !== started) return
@@ -646,6 +676,50 @@ export class Muse {
       })
     this.started = started
     return started
+  }
+
+  // Launches a browser and proves it will run page script before anything is asked of it. A kernel
+  // that refuses (Donut Browser's Wayfern on its free plan opens a window and serves CDP but
+  // rejects Runtime.evaluate) cannot be driven, and every page here needs that call; the sign-in
+  // only reads cookies and navigates, so it looked fine and the refusal only surfaced later as a
+  // chat page that never became ready. When the chosen browser refuses, the engine falls back to
+  // the system browser once and remembers the refusal, so later starts skip it instead of waiting
+  // out its timeouts again.
+  async open(executable: string, extraArgs: string[]): Promise<any> {
+    const spare = this.executable
+    const hasSpare = Boolean(spare) && spare !== executable
+    // Already refused here: do not launch it again. Without another browser there is nothing to
+    // do but say why, in words that name the fix.
+    if (executable && this.refused.has(executable)) {
+      if (!hasSpare) throw new GenerationError(refusalProblem(executable, this.refused.get(executable) || ""))
+      return this.usable(spare as string)
+    }
+    const first = await this.attempt(executable, extraArgs)
+    if (!first.said) return first.launched
+    if (executable) this.refused.set(executable, first.said)
+    if (!hasSpare) throw new GenerationError(refusalProblem(executable, first.said))
+    this.onAutomationRefused(executable, first.said)
+    return this.usable(spare as string)
+  }
+
+  // Starts the spare browser and proves it too. A spare that also refuses is reported rather than
+  // retried: two refusals in a row mean this machine has no browser this engine can drive.
+  async usable(executable: string): Promise<any> {
+    const known = this.refused.get(executable)
+    if (known) throw new GenerationError(refusalProblem(executable, known))
+    const got = await this.attempt(executable, [])
+    if (!got.said) return got.launched
+    this.refused.set(executable, got.said)
+    throw new GenerationError(refusalProblem(executable, got.said))
+  }
+
+  // One launch, then the probe. A refusing browser is closed before returning, since falling back
+  // must not leave a window that cannot be used sitting on screen.
+  async attempt(executable: string, extraArgs: string[]): Promise<{ launched: any; said: string }> {
+    const launched = await this.launch({ ...this.opts, executable, extraArgs, temporary: true })
+    const said = await this.probeAutomation(launched)
+    if (said) await launched.close().catch(() => {})
+    return { launched, said }
   }
 
   drop() {
