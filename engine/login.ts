@@ -9,7 +9,7 @@ import path from "node:path"
 import { browserPathProblem, launchBrowser, normalizeBrowserPath, pageUrl } from "./browser.ts"
 import { CDP, httpJSON } from "./cdp.ts"
 import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.ts"
-import { AuthError, ESSENTIAL, renewSession } from "./muse.ts"
+import { AccountUnlinkedError, AuthError, ESSENTIAL, UNLINKED, renewSession } from "./muse.ts"
 import type { Cookies, ExpiryMap, SavedAccount } from "./types.ts"
 
 type LoginRun = {
@@ -45,6 +45,31 @@ export function chatTarget(list: unknown, port: number, site: string): string | 
   return (onSite ?? pages[0])?.address ?? null
 }
 
+// What the sign-in window is showing, in the two answers that decide the run: a composer means the
+// account can be used, and the 「Muse已解除关联」 screen means only a person can do anything.
+const SCREEN_JS = `(function(){
+  var b = document.body;
+  return JSON.stringify({
+    text: b ? b.innerText.slice(0, 2000) : "",
+    composer: !!document.querySelector('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')
+  });
+})()`
+
+// A page that shows the unlinked screen instead of a composer is not a sign-in that can be
+// finished from here: muse.ai replaced the chat with a form, and the form is the way back.
+export function screenNeedsPerson(screen: { text: string; composer: boolean }): boolean {
+  return !screen.composer && UNLINKED.test(String(screen.text || ""))
+}
+
+// Said while the window is still open, on the screen it is showing. Every step named here can be
+// carried out in that window; the previous wording named a button on a page nothing had opened.
+export function handOffProblem(): string {
+  return "muse.ai 已解除这个账号的 Muse 关联（页面原文「Muse已解除关联」）：工作区的虚拟机被停用，重新登录不会恢复。"
+    + "登录窗口还留着这一页——请在那个窗口里点「提交工单」，填「提交反馈」表单（主题选「账户访问与登录」），"
+    + "等 muse.ai 重新关联后再登录一次；换一个没被解除关联的账号也能立刻继续用。"
+    + "窗口会一直留着，直到你关掉它，或引擎停止。"
+}
+
 export class Logins {
   site: string
   host: string
@@ -56,10 +81,11 @@ export class Logins {
   everyMs: number
   limitMs: number
   headless: boolean
+  screenMs: number
   onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string) => Promise<SavedAccount>
   runs: Map<string, LoginRun>
 
-  constructor({ site, executable, resolveExecutable, dir, proxy = "", fetchImpl = fetch, everyMs = 2000, limitMs = 15 * 60_000, headless = false, onDone }: {
+  constructor({ site, executable, resolveExecutable, dir, proxy = "", fetchImpl = fetch, everyMs = 2000, limitMs = 15 * 60_000, headless = false, screenMs = 15_000, onDone }: {
     site: string
     executable?: string
     resolveExecutable?: () => Promise<any>
@@ -69,11 +95,12 @@ export class Logins {
     everyMs?: number
     limitMs?: number
     headless?: boolean
+    screenMs?: number
     onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string) => Promise<SavedAccount>
   }) {
     this.site = site.replace(/\/+$/, "")
     this.host = new URL(this.site).hostname
-    Object.assign(this, { executable, resolveExecutable, dir, proxy, fetchImpl, everyMs, limitMs, headless, onDone })
+    Object.assign(this, { executable, resolveExecutable, dir, proxy, fetchImpl, everyMs, limitMs, headless, screenMs, onDone })
     this.runs = new Map<string, LoginRun>() // id → {status, step, handle?, expires?, error?, stop?}
   }
 
@@ -186,10 +213,17 @@ export class Logins {
     run.status = "pending"
     run.step = "等你在窗口里登录"
     let closed = false
+    let timer: ReturnType<typeof setInterval> | null = null
+    const stopPolling = () => {
+      if (timer) {
+        clearInterval(timer)
+        timer = null
+      }
+    }
     const close = () => {
       if (closed) return
       closed = true
-      clearInterval(timer)
+      stopPolling()
       opened.close().then(() => rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 })).catch(() => {})
     }
     const finish = (fields: Partial<LoginRun>) => {
@@ -197,12 +231,28 @@ export class Logins {
       Object.assign(run, fields)
       close()
     }
+    // The window is left standing where the person can act on it: nothing is closed and the profile
+    // is kept, because the form they are about to fill lives in that window. Closing the window by
+    // hand, or stopping the engine, ends the run and cleans up as it always did.
+    const hold = () => {
+      // The window can close between the read and here; then the exit handler above has already
+      // finished the run with its own words, and there is no window left to point at.
+      if (closed) return
+      Object.assign(run, { status: "failed", error: handOffProblem() })
+      stopPolling()
+      run.stop = () => close()
+      opened.proc.once("exit", () => {
+        if (closed) return
+        closed = true
+        rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 })
+      })
+    }
     run.stop = () => finish({ status: "failed", error: "引擎停止了，登录没有完成" })
     opened.proc.on("exit", () => { if (!closed) finish({ status: "failed", error: "登录窗口在登录完成前被关掉了" }) })
     const started = Date.now()
     let busy = false
     let sentToChat = 0
-    const timer = setInterval(async () => {
+    timer = setInterval(async () => {
       if (busy || run.status !== "pending") return
       if (Date.now() - started > this.limitMs) return finish({ status: "failed", error: "登录超时" })
       busy = true
@@ -216,6 +266,22 @@ export class Logins {
         if (ESSENTIAL.every((n) => got.cookies[n])) {
           run.step = "正在向 muse.ai 确认会话"
           const renewed = await renewSession(this.site, got.cookies, got.exp, { fetchImpl: this.fetchImpl, wakeVm: false })
+          // Read the window before closing it. muse.ai answers /api/session for a workspace it has
+          // already unlinked, so the page is the ground truth; and the 「提交工单」 form that
+          // re-links the account exists only in this window. Closing first would leave the person
+          // an instruction they can no longer carry out.
+          if (!this.headless) {
+            if (!sentToChat) {
+              sentToChat = Date.now()
+              await this.openChat(opened.port).catch(() => {})
+            }
+            run.step = "正在确认这个账号还能用（就看你登录的这个窗口）"
+            const screen = await this.windowScreen(opened.port, this.screenMs)
+            if (screenNeedsPerson(screen)) {
+              hold()
+              return
+            }
+          }
           // the window has done its part; onDone may still be checking the account answers
           close()
           run.step = "已领到会话，正在发一条测试消息确认账号能回答"
@@ -223,7 +289,9 @@ export class Logins {
             const saved = await this.onDone(renewed.cookies, renewed.cookies_exp, renewed.label, renewed.vm)
             finish({ status: "done", handle: saved.handle, expires: saved.expires, label: saved.label, warning: saved.warning })
           } catch (err: any) {
-            finish({ status: "failed", error: err.message })
+            // The account was saved, then the test message met the unlinked screen: the window is
+            // gone, so the message has to say that signing in again opens one.
+            finish({ status: "failed", error: err instanceof AccountUnlinkedError ? `${err.message}重新登录一次，登录窗口会停在这一页，可以在那里提交工单。` : err.message })
           }
         }
       } catch (err: any) {
@@ -232,6 +300,36 @@ export class Logins {
         busy = false
       }
     }, this.everyMs)
+  }
+
+  // What the window the person signed in through is showing, read on the port that window wrote.
+  // Two answers end the wait: a composer, which means the account can be used, and the unlinked
+  // screen, which means the form in this very window is the only way back. Anything else (a page
+  // still painting, a site that has not decided yet) is waited out up to the ceiling, and the
+  // caller then behaves exactly as it did before this check existed.
+  async windowScreen(port: number, ms: number): Promise<{ text: string; composer: boolean }> {
+    const end = Date.now() + ms
+    let text = ""
+    let composer = false
+    while (Date.now() < end) {
+      const list: unknown = await httpJSON(`http://127.0.0.1:${port}/json/list`, 2000).catch(() => null)
+      const target = chatTarget(list, port, this.site)
+      if (target) {
+        const page = await CDP.connect(target).catch(() => null)
+        if (page) {
+          try {
+            const seen = JSON.parse(String((await page.js(SCREEN_JS).catch(() => "")) || "{}") || "{}")
+            text = String(seen.text || "")
+            composer = Boolean(seen.composer)
+          } finally {
+            page.close()
+          }
+        }
+      }
+      if (composer || UNLINKED.test(text)) return { text, composer }
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    return { text, composer }
   }
 
   async cookies(browser: any): Promise<{ cookies: Cookies; exp: ExpiryMap }> {
