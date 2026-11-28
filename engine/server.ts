@@ -43,6 +43,8 @@ function fail(status: number, message: string, code: string): HttpError {
 // re-sign-in.
 export function generationCode(text: string): [string, number] {
   const lower = String(text || "").toLowerCase()
+  // A person has to re-link the workspace on muse.ai; waiting and retrying both waste time.
+  if (text.includes("解除关联") || lower.includes("unlinked")) return ["account_unlinked", 3600]
   if (text.includes("预热") || lower.includes("warming")) return ["vm_warming", 10]
   if (text.includes("页面") || lower.includes("page") || text.includes("加载")) return ["page_unavailable", 10]
   if (text.includes("超时") || lower.includes("timeout")) return ["upstream_timeout", 5]
@@ -510,6 +512,9 @@ export class Engine {
         break
       case "prompt_too_long":
         mapped = fail(413, message, "prompt_too_long")
+        break
+      case "account_unlinked":
+        mapped = new HttpError(503, message, "account_unlinked", 3600)
         break
       case "invalid_request":
         mapped = fail(400, message, "invalid_request")
