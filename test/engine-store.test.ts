@@ -154,6 +154,7 @@ describe("the small helpers", () => {
       ["页面没有加载", "page_unavailable", 10],
       ["TIMEOUT", "upstream_timeout", 5],
       ["没有发出去", "send_failed", 2],
+      ["Muse已解除关联", "account_unlinked", 3600],
       ["other", "engine_unavailable", 5],
     ]
     for (const [text, code, retry] of table) {

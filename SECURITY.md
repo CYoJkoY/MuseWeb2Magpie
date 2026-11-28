@@ -211,6 +211,15 @@
     （页面慢、不能自动化、额度）保留账号，进度页给出「已保存但不确认，第一条对话会再试」的
     警告。测试见 `test/browser-refusal.test.ts`，设计见
     [`docs/adr/0018-browser-that-can-be-driven.md`](docs/adr/0018-browser-that-can-be-driven.md)。
+26. **解除关联的账号如实说明，不当作页面故障重试，也不删除。** muse.ai 可以在账号侧解除 Muse
+    工作区：`/api/session` 报 `vm_state: DISABLED`，`/api/hatch/vm/wake` 回 `409`，页面在首屏几
+    秒后换成「Muse已解除关联」。以前这会被读成「找不到聊天输入框」「设置菜单没有打开」，首字还
+    要干等 120 秒，`warm` 也会对即将失效的页面报成功。现在 `engine/muse.ts` 在会话续期、开页、
+    发送、读额度与两处轮询里都读同一段页面原文（`UNLINKED`），命中就抛 `AccountUnlinkedError`
+    并带上可行动的说明（`unlinkedProblem()`）；只有 `DISABLED` 且唤醒被 `409` 拒绝才判定，能唤
+    醒或状态不符时不误判。驱动把它记为 `account_unlinked` 且不重试 `verify`，网关映射为 503 +
+    `Retry-After: 3600`；账号保留，不因这个状态被删除。测试见 `test/unlinked.test.ts`，设计见
+    [`docs/adr/0019-unlinked-workspace-diagnosis.md`](docs/adr/0019-unlinked-workspace-diagnosis.md)。
 
 ## 已知残留风险
 

@@ -28,6 +28,10 @@ export class GenerationError extends Error {}
 export class QuotaError extends GenerationError {}
 // The page refused the message as too long before it answered; retry with a smaller history.
 export class PromptTooLongError extends GenerationError {}
+// muse.ai cut this account's Muse workspace loose on its own side: the VM is DISABLED, refuses to
+// be woken, and the site replaces the chat with a "Muse 已解除关联" screen. Signing in again does
+// not bring it back, so the fix is a person's on muse.ai, not a retry.
+export class AccountUnlinkedError extends GenerationError {}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
@@ -148,15 +152,23 @@ export async function renewSession(site: string, cookies: Cookies, expires: Expi
   if (!body || SESSION_BLOCKED.test(status) || !(SESSION_LIVE.has(status) || vmId)) {
     throw failed(new GenerationError(`/api/session 没有可用的会话（status=${status || "空"}）；请在官网检查账号状态`))
   }
-  if (wakeVm && vmId && vmState !== "DISABLED") {
+  if (wakeVm && vmId) {
+    // The wake is asked for even when the state says DISABLED: its refusal is the second piece of
+    // proof that the workspace was unlinked rather than merely asleep, and one POST is cheaper than
+    // a browser that spends a minute on a page which only ever shows 「Muse已解除关联」.
+    let refused = false
     try {
-      await fetchImpl(`${site}/api/hatch/vm/wake`, {
+      const woke = await fetchImpl(`${site}/api/hatch/vm/wake`, {
         method: "POST",
         headers: { ...headers, cookie: cookieHeader(cur), "content-type": "application/json" },
         body: JSON.stringify({ vm_id: vmId, retry_count: 0, connect_attempt_id: randomUUID() }),
         signal: AbortSignal.timeout(8000),
       })
+      refused = woke.status === 409
     } catch {}
+    if (refused && /^disabled$/i.test(vmState)) {
+      throw failed(new AccountUnlinkedError(unlinkedProblem(vmState)))
+    }
   }
   return {
     cookies: cur,
@@ -245,6 +257,19 @@ export function usageCard(meters: Meter[] = [], now = Date.now()): UsageCard {
 // The page's own words for a VM it is not connected to, in English and in its zh_CN strings.
 const CONNECTING = /Connecting\.\.\.|正在连接/
 const STUCK = /Still sending|仍在发送中|Connecting\.\.\.|正在连接/
+// muse.ai has unlinked the account's Muse workspace and says so on the page. Its server picks this
+// screen a few seconds after the composer first paints, so a page that was ready can still end up
+// here: the check belongs wherever the composer is looked for, not only at load time.
+// No backslash escapes: this one is also pasted into page script, where a template literal would
+// eat them.
+const UNLINKED = /已解除关联|解除关联 Muse|解除关联Muse|unlinked/i
+// What that screen means and what only a person can do about it.
+export function unlinkedProblem(vmState = ""): string {
+  const state = vmState ? `，VM 状态 ${vmState}` : ""
+  return `muse.ai 已解除这个账号的 Muse 关联（页面原文「Muse已解除关联」${state}）：工作区的虚拟机停用，`
+    + "重新登录也不会恢复。需要在 muse.ai 上按页面提示点「提交工单」重新关联 Muse，"
+    + "关联成功后再在插件里重新登录这个账号；换一个没被解除关联的账号也能立刻继续用。"
+}
 // The page refused the message itself before any answer appeared.
 const PROMPT_TOO_LONG = /(?:too long|message is too long|prompt is too long|exceeds? .{0,20}(?:limit|length)|maximum context|上下文.{0,10}(?:过长|太长|上限)|消息.{0,10}(?:过长|太长)|内容.{0,10}过长)/i
 
@@ -341,7 +366,11 @@ const POLL_JS = `(function(){
   var nonEmpty=bs.filter(function(b){return said(b).length>0;});
   var txt=nonEmpty.length?said(nonEmpty[nonEmpty.length-1]):'';
   var stop=!!document.querySelector(${JSON.stringify(STOP_SEL)});
-  return JSON.stringify({cnt:alive.length,txt:txt,stop:stop,media:media,pending:pending});
+  // muse.ai can replace the whole chat with the 「Muse已解除关联」 screen mid-answer; the composer
+  // goes with it, so this is what tells the wait that no answer is coming.
+  var bodyTxt=document.body?(document.body.innerText||''):'';
+  var unlinked=${UNLINKED}.test(bodyTxt)&&!document.querySelector(${JSON.stringify(COMPOSER_SEL)});
+  return JSON.stringify({cnt:alive.length,txt:txt,stop:stop,media:media,pending:pending,unlinked:unlinked});
 })()`
 
 // Typing into the composer. A textarea keeps its value behind a native setter that React reads;
@@ -484,6 +513,9 @@ export interface MuseOptions {
   shortQuietMs?: number
   stopQuietMs?: number
   loadMs?: number
+  // How long the composer must keep showing before a page counts as open: muse.ai swaps in the
+  // unlinked screen a few seconds after the first paint.
+  settleMs?: number
   onCookies?: (id: string, cookies: Cookies, exp: ExpiryMap, vm: string) => void
   onLost?: (why: string) => void
   // Called once per browser that turns out to refuse page script, so the driver can stop choosing
@@ -512,6 +544,7 @@ export class Muse {
   shortQuietMs: number
   stopQuietMs: number
   loadMs: number
+  settleMs: number
   onCookies: (id: string, cookies: Cookies, exp: ExpiryMap, vm: string) => void
   onAutomationRefused: (executable: string, said: string) => void
   launch: (options: any) => Promise<any>
@@ -542,6 +575,7 @@ export class Muse {
     shortQuietMs = 500,
     stopQuietMs = 15_000,
     loadMs = 30_000,
+    settleMs = 3_000,
     onCookies = () => {},
     onLost = () => {},
     onAutomationRefused = () => {},
@@ -563,6 +597,7 @@ export class Muse {
     this.shortQuietMs = shortQuietMs
     this.stopQuietMs = stopQuietMs
     this.loadMs = loadMs
+    this.settleMs = settleMs
     this.onCookies = onCookies
     this.onAutomationRefused = onAutomationRefused
     this.launch = launch
@@ -622,11 +657,17 @@ export class Muse {
       }
       return false
     }
+    // The same unlinked screen that takes the composer also takes the header, so a missing
+    // settings button is read in the page's own words before it is blamed on the page.
+    const unlinked = async () => UNLINKED.test(String((await page.js("document.body ? document.body.innerText.slice(0,1200) : ''").catch(() => "")) || ""))
     try {
       await page.send("Page.enable")
       await page.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {})
       await page.send("Page.navigate", { url: `${this.site}/thread/new` })
-      if (!(await until(settingsButton, this.loadMs))) throw new GenerationError("没有找到设置按钮")
+      if (!(await until(settingsButton, this.loadMs))) {
+        if (await unlinked()) throw new AccountUnlinkedError(unlinkedProblem(a.vmState))
+        throw new GenerationError("没有找到设置按钮")
+      }
       let open = false
       for (let i = 0; i < 3 && !open; i++) {
         await sleep(i ? 1000 : 600)
@@ -634,7 +675,10 @@ export class Muse {
         await press()
         open = await until(settingsItem, 2500)
       }
-      if (!open) throw new GenerationError("设置菜单没有打开")
+      if (!open) {
+        if (await unlinked()) throw new AccountUnlinkedError(unlinkedProblem(a.vmState))
+        throw new GenerationError("设置菜单没有打开")
+      }
       await press()
       // the meters come over the VM's connection: placeholders until it is up
       const shown = await until(() => document.querySelectorAll('[role="progressbar"][aria-valuenow]').length > 0, 20_000)
@@ -839,6 +883,8 @@ export class Muse {
     try {
       const r = await renewSession(this.site, cookies, exp, { fetchImpl: this.fetchImpl })
       a.lastRenew = Date.now()
+      // Kept for the messages that name why a page had no composer.
+      if (r.vmState) a.vmState = r.vmState
       this.onCookies(account.id, r.cookies, r.cookies_exp, r.vm)
       if (a.contextId) await this.setCookies(browser, a.contextId, r.cookies, r.cookies_exp)
       return { cookies: r.cookies, exp: r.cookies_exp }
@@ -853,6 +899,12 @@ export class Muse {
         if (!closeOnAuth) a.dead = err
         else await this.closeAccount(account.id)
         if (closeOnAuth) throw err
+      }
+      // An unlinked workspace is not a transport hiccup: waiting for the page cannot help, so it
+      // is reported as it is instead of letting a composer-less page do the talking.
+      if (err instanceof AccountUnlinkedError) {
+        a.vmState = "DISABLED"
+        throw err
       }
       return { cookies: err.cookies || cookies, exp: err.cookies_exp || exp }
     }
@@ -881,17 +933,35 @@ export class Muse {
       }
       return false
     }
-    if (await readyBy(this.loadMs)) return { page, targetId, used: false, at: Date.now() }
+    // The composer painting is not the whole answer: muse.ai decides on the client, a few seconds
+    // in, whether this workspace is usable at all, and replaces a working composer with the
+    // 「Muse已解除关联」 screen without navigating. A page counts as open only once the composer has
+    // stayed there, so a warm that succeeds is a warm the next message can use.
+    const stays = async (ms) => {
+      const end = Date.now() + ms
+      while (Date.now() < end) {
+        await sleep(150)
+        if ((await page.js(READY_JS).catch(() => "")) !== "ready") return false
+      }
+      return true
+    }
+    const opened = async () => (await readyBy(this.loadMs)) && (await stays(this.settleMs))
+    const bodyText = async () => String((await page.js("document.body ? document.body.innerText.slice(0,1200) : ''").catch(() => "")) || "")
+    if (await opened()) return { page, targetId, used: false, at: Date.now() }
     // The current build marks a signed-out page with a trace-policy attribute before its text
     // says anything; the text check below stays for builds that only render a "Log in" button.
     const gate = await page.js("!!document.querySelector('[data-hatch-initial-trace-policy=\\'hatch.login\\']')").catch(() => false)
-    const body = String((await page.js("document.body ? document.body.innerText.slice(0,1200) : ''").catch(() => "")) || "")
     // A VM that is still connecting gets one more window; anything else has already failed.
-    if (/connecting\.\.\.|正在连接|正在预热|warming up/i.test(body) && (await readyBy(this.loadMs))) {
+    if (/connecting\.\.\.|正在连接|正在预热|warming up/i.test(await bodyText()) && (await opened())) {
       return { page, targetId, used: false, at: Date.now() }
     }
+    const body = await bodyText()
     page.close()
     await browser.send("Target.closeTarget", { targetId }).catch(() => {})
+    // Read after the page settled: the workspace was unlinked, so there is nothing to sign in to
+    // and nothing to retry. Told apart from a sign-out (the cookies are fine) and from a timeout
+    // (the page did load).
+    if (UNLINKED.test(body)) throw new AccountUnlinkedError(unlinkedProblem(a.vmState))
     if (gate || SIGNED_OUT.test(body.toLowerCase())) {
       await this.closeAccount(account.id)
       throw new AuthError("会话已被 muse.ai 登出，需要重新登录")
@@ -988,10 +1058,16 @@ export class Muse {
     if (/^\/thread\/[^/]+$/.test(p) && p !== "/thread/new") a.threads.set(conversation, p)
   }
 
-  async send(page, prompt) {
+  async send(page, prompt, vmState = "") {
     // Focus, scroll and measure in one evaluate: a single CDP round trip before typing.
     const rect = await page.js(`(function(){var c=document.querySelector(${JSON.stringify(COMPOSER_SEL)});if(!c)return null;try{c.scrollIntoView({block:'center',inline:'nearest'});c.focus();}catch(e){}var r=c.getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)});})()`)
-    if (!rect) throw new GenerationError("找不到聊天输入框")
+    if (!rect) {
+      // No composer can mean two very different things: a page that is still loading, or the
+      // 「Muse已解除关联」 screen that has no chat at all. Say which.
+      const body = String((await page.js("document.body ? document.body.innerText.slice(0,1200) : ''").catch(() => "")) || "")
+      if (UNLINKED.test(body)) throw new AccountUnlinkedError(unlinkedProblem(vmState))
+      throw new GenerationError("找不到聊天输入框")
+    }
     const c = JSON.parse(rect)
     for (const type of ["mousePressed", "mouseReleased"]) {
       await page.send("Input.dispatchMouseEvent", { type, x: c.x, y: c.y, button: "left", clickCount: 1 })
@@ -1027,9 +1103,12 @@ export class Muse {
         stop: !!d.stop,
         media: Array.isArray(d.media) ? d.media : [],
         pending: !!d.pending,
+        // The page swapped in the 「Muse已解除关联」 screen: the composer is gone and no answer
+        // is coming, so the wait that reads this stops instead of running to its deadline.
+        unlinked: !!d.unlinked,
       }
     } catch {
-      return { cnt: 0, txt: "", stop: false, media: [], pending: false }
+      return { cnt: 0, txt: "", stop: false, media: [], pending: false, unlinked: false }
     }
   }
 
@@ -1096,7 +1175,7 @@ export class Muse {
     timing.tabMs = Date.now() - t0
     const base = await this.poll(page)
     const seenMedia = new Set((base.media || []).map((m) => m.src))
-    const sentHow = await this.send(page, text)
+    const sentHow = await this.send(page, text, a.vmState)
     if (sentHow === "not-sent") throw new GenerationError("消息没有发出去（输入框还在，发送按钮没有响应）")
     const sentAt = Date.now()
     const deadline = sentAt + this.chatTimeoutMs
@@ -1130,6 +1209,9 @@ export class Muse {
       await sleep(60)
       const polled = await this.poll(page)
       const { cnt, txt } = polled
+      // The unlinked screen takes the composer away, so no text will ever arrive; saying why now
+      // beats spending the first-token window on a page that cannot answer.
+      if (polled.unlinked) throw new AccountUnlinkedError(unlinkedProblem(a.vmState))
       takeMedia(polled)
       const textNew = txt && !(cnt <= base.cnt && txt === base.txt)
       const mediaNew = cnt > base.cnt && (media.length || polled.pending)
@@ -1172,6 +1254,9 @@ export class Muse {
     }
     if (!got) {
       const body = String((await page.js("document.body.innerText").catch(() => "")) || "")
+      // Read after the page settled: the workspace was unlinked on muse.ai's side, so neither the
+      // message nor a retry can reach it. Told apart from a too-long prompt, which can be resent.
+      if (UNLINKED.test(body)) throw new AccountUnlinkedError(unlinkedProblem(a.vmState))
       if (PROMPT_TOO_LONG.test(body)) throw new PromptTooLongError("muse.ai 拒收了这条消息：内容过长")
       if (/正在预热|warming up/i.test(body)) throw new GenerationError("muse.ai 这个账号的虚拟机还在预热，没有回答")
       throw new GenerationError("等待助手首字响应超时")
@@ -1183,6 +1268,7 @@ export class Muse {
       await sleep(60)
       const polled = await this.poll(page)
       const { txt, stop } = polled
+      if (polled.unlinked) throw new AccountUnlinkedError(unlinkedProblem(a.vmState))
       takeMedia(polled)
       // The quiet window starts when the page says generation ended, not at the last text change:
       // a long silence while Stop is visible must not make the first poll without it final.

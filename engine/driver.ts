@@ -5,7 +5,7 @@ import readline from "node:readline"
 import { browserPathProblem, findBrowser } from "./browser.ts"
 import { ensureFingerprintBrowser } from "./fingerprint.ts"
 import { Logins } from "./login.ts"
-import { AuthError, Muse, PromptTooLongError, QuotaError, redact, renewSession } from "./muse.ts"
+import { AccountUnlinkedError, AuthError, Muse, PromptTooLongError, QuotaError, redact, renewSession } from "./muse.ts"
 import { proxiedFetch, proxyHasCredentials, resolveProxy } from "./net.ts"
 import { dataDir } from "./paths.ts"
 import { buildPrompt, PromptError } from "./prompt.ts"
@@ -71,7 +71,8 @@ async function verifyAccount(account: any, tries = 3) {
       return await muse.verify(account)
     } catch (err: any) {
       last = err
-      if (err instanceof AuthError || err instanceof QuotaError) throw err
+      // An unlinked workspace answers the same on every try; retrying only delays the message.
+      if (err instanceof AuthError || err instanceof QuotaError || err instanceof AccountUnlinkedError) throw err
       if (attempt < tries - 1) await sleep(8_000 * (attempt + 1))
     }
   }
@@ -258,6 +259,7 @@ function errorKind(err: any): string {
   if (err?.kind) return String(err.kind)
   if (err instanceof AuthError) return "auth"
   if (err instanceof QuotaError) return "quota"
+  if (err instanceof AccountUnlinkedError) return "account_unlinked"
   if (err instanceof PromptTooLongError) return "prompt_too_long"
   if (err instanceof PromptError) return "invalid_request"
   return "generation"
@@ -402,7 +404,7 @@ async function chat(params: any) {
         text = repaired
       }
     } catch (err: any) {
-      if (err instanceof AuthError || err instanceof QuotaError) throw err
+      if (err instanceof AuthError || err instanceof QuotaError || err instanceof AccountUnlinkedError) throw err
     }
   }
   if (requiredTool && !satisfied()) {
