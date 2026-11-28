@@ -262,7 +262,7 @@ const STUCK = /Still sending|仍在发送中|Connecting\.\.\.|正在连接/
 // here: the check belongs wherever the composer is looked for, not only at load time.
 // No backslash escapes: this one is also pasted into page script, where a template literal would
 // eat them.
-const UNLINKED = /已解除关联|解除关联 Muse|解除关联Muse|unlinked/i
+export const UNLINKED = /已解除关联|解除关联 Muse|解除关联Muse|unlinked/i
 // What that screen means and what only a person can do about it.
 export function unlinkedProblem(vmState = ""): string {
   const state = vmState ? `，VM 状态 ${vmState}` : ""
