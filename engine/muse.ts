@@ -101,6 +101,37 @@ export function labelOf(body: any): string {
   return ""
 }
 
+// `/api/falco` is signed-in at the same time as `/api/session` and answers with
+// `user.identifier`, muse.ai's stable account id. It exists even when the
+// session body names no one, so the same account keeps one identity across
+// sign-ins instead of a new login-time label. Everything else the answer holds
+// is ignored here, and the id is length-capped like every other bounded read.
+export async function stableAccountId(site: string, cookies: Cookies, { fetchImpl = fetch }: { fetchImpl?: typeof fetch } = {}): Promise<string> {
+  const headers = {
+    "user-agent": UA,
+    origin: site,
+    referer: `${site}/thread/new`,
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    cookie: cookieHeader(cookies),
+  }
+  let res
+  try {
+    res = await fetchImpl(`${site}/api/falco`, { headers, redirect: "manual", signal: AbortSignal.timeout(12_000) })
+  } catch {
+    return ""
+  }
+  if (res.status !== 200) return ""
+  try {
+    const body = await res.json()
+    const id = String(body?.user?.identifier || "").trim()
+    return id.length > 0 && id.length <= 128 ? id : ""
+  } catch {
+    return ""
+  }
+}
+
 export async function renewSession(site: string, cookies: Cookies, expires: ExpiryMap, { fetchImpl = fetch, wakeVm = true }: { fetchImpl?: typeof fetch; wakeVm?: boolean } = {}): Promise<any> {
   let cur: Cookies = { ...(cookies || {}) }
   const exp: ExpiryMap = { ...(expires || {}) }

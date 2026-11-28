@@ -33,7 +33,11 @@ export function loginPage(raw: unknown): string {
   } else {
     note = "这个页面只显示进度，这里不能登录。请在引擎另外打开的开源指纹浏览器 Apostate（或 Chrome、Edge、Chromium、Brave）窗口里完成登录。" + String(state.step || "")
     if (state.note) note += `（上一次出错：${state.note}）`
-    note += "。登录成功后那个窗口会自动关闭，这个页面也会更新。"
+    // A verification wall is passed by hand in that window: telling the person it closes on its
+    // own would invite them to close the only window the check can be finished in.
+    note += /人机验证/.test(String(state.step || ""))
+      ? "。那个窗口正在等你完成 muse.ai 的验证，请不要关闭它；验证通过后它会自己继续登录并关闭。"
+      : "。登录成功后那个窗口会自动关闭，这个页面也会更新。"
   }
   const color = done ? "#2f9e44" : failed ? "#e03131" : "#f59f00"
   const refresh = done || failed ? "" : '<meta http-equiv="refresh" content="2">'

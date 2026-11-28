@@ -207,8 +207,8 @@ const logins = new Logins({
   proxy,
   fetchImpl,
   headless: env.MUSE_WEB_LOGIN_HEADLESS === "1",
-  onDone: async (cookies, exp, label, vm) => {
-    const saved = await storeRequest("store.add", { cookies, cookies_exp: exp, label, vm })
+  onDone: async (cookies, exp, label, vm, accountId) => {
+    const saved = await storeRequest("store.add", { cookies, cookies_exp: exp, label, vm, identity: accountId })
     if (saved.again) await muse.closeAccount(saved.handle).catch(() => {})
     await storeRequest("woken", { handle: saved.handle })
     if (verifyLogin) {

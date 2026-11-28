@@ -56,6 +56,49 @@ describe("the account store", () => {
     if (POSIX) assert.equal(statSync(file).mode & 0o777, 0o600)
   })
 
+  test("muse.ai's own id names the account, so signing in again renews it", () => {
+    const file = path.join(tmp("mw-store-"), "accounts.json")
+    const store = new Store(file)
+
+    // No readable name from muse.ai, but its id: the account is named by the id, not by the time
+    // of this sign-in, so the next sign-in is recognised as the same account.
+    const first = store.add({ hatch_sess: "a" }, {}, "", "vm-1", "id-123")
+    assert.equal(first.label, "muse.ai #id-123")
+    assert.equal(first.accountId, "muse.ai #id-123")
+
+    // A second sign-in to the same account: same handle, same name, nothing added. The id alone
+    // is enough, because muse.ai does not always hand the VM id back.
+    const again = store.add({ hatch_sess: "b" }, {}, "", "vm-2", "id-123")
+    assert.equal(again.again, true)
+    assert.equal(again.handle, first.handle)
+    assert.equal(again.label, "muse.ai #id-123")
+    assert.equal(again.accountId, "muse.ai #id-123")
+    assert.equal(store.count(), 1)
+  })
+
+  test("a sign-in time is replaced by the id; a name muse.ai sent is kept", () => {
+    const file = path.join(tmp("mw-store-"), "accounts.json")
+    const store = new Store(file)
+
+    // An account saved before its id was known carries the time it was created, and nothing that
+    // can be used to recognise it again.
+    const old = store.add({ hatch_sess: "a" }, {}, "", "vm-1")
+    assert.match(old.label, / 登录$/)
+    assert.equal(old.accountId, undefined)
+
+    // Signing in again with the id known renames it in place, so the file and Magpie agree.
+    const named = store.add({ hatch_sess: "b" }, {}, "", "vm-1", "id-123")
+    assert.equal(named.handle, old.handle)
+    assert.equal(named.label, "muse.ai #id-123")
+    assert.equal(named.accountId, "muse.ai #id-123")
+    assert.equal(new Store(file).get(old.handle)?.label, "muse.ai #id-123")
+
+    // A readable name muse.ai sent is what the person recognises: it stays, id or not.
+    const human = store.add({ hatch_sess: "c" }, {}, "a@b.c", "vm-9", "id-999")
+    assert.equal(human.label, "a@b.c")
+    assert.equal(human.accountId, "a@b.c")
+  })
+
   test("an account with no cookies is not an account", () => {
     const file = path.join(tmp("mw-store-"), "accounts.json")
     writeFileSync(file, JSON.stringify({ empty: { cookies: {}, label: "empty" } }))
@@ -173,6 +216,16 @@ describe("the small helpers", () => {
     assert.ok(!loginPage(state).includes("<script>"), "unescaped login error")
     assert.ok(!loginPage({ status: "failed", error: "<script>x</script>" }).includes("<script>"))
     assert.ok(loginPage(null).includes("找不到这次登录"))
+  })
+
+  test("the login page never tells the person to expect a closing window mid-verification", () => {
+    const step = "muse.ai 要求人机验证：请在这个仍打开的窗口里完成验证（不要关闭窗口）；通过后会自动继续登录。"
+    const page = loginPage({ status: "pending", step })
+    assert.match(page, /请在这个仍打开的窗口里完成验证/)
+    assert.match(page, /请不要关闭它/)
+    assert.doesNotMatch(page, /那个窗口会自动关闭/)
+    // Every other step still says the window closes once the sign-in is through.
+    assert.match(loginPage({ status: "pending", step: "等你在窗口里登录" }), /那个窗口会自动关闭/)
   })
 
   test("the engine recognises itself as the entry point however its path was typed", () => {

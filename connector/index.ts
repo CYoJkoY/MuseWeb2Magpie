@@ -234,7 +234,7 @@ export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}
     const { id, url } = await res.json() as any
     return {
       url,
-      instructions: "在弹出的浏览器窗口里登录 muse.ai。登录后窗口会自动关闭，引擎再发一条测试消息，账号能回答才算登录成功。",
+      instructions: "在弹出的浏览器窗口里登录 muse.ai。若 muse.ai 要求人机验证，请在这个窗口里完成，它不会自动关掉；通过后引擎自动继续并关闭窗口，再发一条测试消息，账号能回答才算登录成功。",
       method: "auto",
       async callback() {
         const end = Date.now() + LOGIN_LIMIT_MS
@@ -246,12 +246,16 @@ export const MuseWebConnectorPlugin = async (_input: any = {}, options: any = {}
           const state = await poll.json() as any
           if (state.status === "done") {
             const expires = Number.isFinite(state.expires) ? state.expires : Date.now() + 86_400_000
+            // The name Magpie keys the account by: muse.ai's own id, never the sign-in time, so
+            // signing in again renews this account instead of adding a look-alike. An engine too
+            // old to send it is named by its label, as before.
+            const accountId = state.accountId || state.label
             return {
               type: "success",
               refresh: state.handle,
               access: state.handle,
               expires,
-              ...(state.label ? { accountId: state.label } : {}),
+              ...(accountId ? { accountId } : {}),
               ...(state.label?.includes("@") ? { email: state.label } : {}),
             }
           }

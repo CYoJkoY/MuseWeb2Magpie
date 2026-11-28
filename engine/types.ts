@@ -12,6 +12,9 @@ export interface StoredAccount {
   cookies: Cookies
   cookies_exp: ExpiryMap
   label?: string
+  // muse.ai's own id for the account (/api/falco user.identifier), kept so the same
+  // account is recognised across sign-ins even when the display name is a timestamp.
+  identity?: string
   created?: number
   vm?: string
 }
@@ -28,6 +31,8 @@ export interface SavedAccount {
   handle: string
   expires: number | null
   label: string
+  // A stable name for the account that is not the sign-in time, when muse.ai gives one.
+  accountId?: string
   // Set when the session was saved but a test message could not confirm it answers yet.
   warning?: string
   again?: boolean
@@ -63,6 +68,7 @@ export interface Renewed {
   cookies: Cookies
   cookies_exp: ExpiryMap
   label: string
+  identity: string
   vm: string
   vmState: string
 }

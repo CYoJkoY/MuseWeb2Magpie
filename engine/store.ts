@@ -57,21 +57,30 @@ export class Store {
   // Stores a fresh sign-in. vm is muse.ai's id for the account's VM, one per account: signing in
   // again to an account already here renews that one, under its handle and name, instead of
   // adding another. label is what Magpie shows; the sign-in time when muse.ai names no one.
-  add(cookies: Cookies, exp: ExpiryMap, label: string, vm: string): SavedAccount {
+  // identity is muse.ai's own `/api/falco` id for the account: it names the account when muse.ai
+  // sends no readable name, and recognises the same account when the VM id is not at hand.
+  add(cookies: Cookies, exp: ExpiryMap, label: string, vm: string, identity = ""): SavedAccount {
     const cleanCookies = { ...(cookies || {}) }
     const cleanExp = { ...(exp || {}) }
+    const stable = cleanIdentity(identity)
     const next: Record<string, StoredAccount> = { ...this.all }
-    if (vm) {
+    if (vm || stable) {
       for (const handle of Object.keys(this.all)) {
         const item = this.all[handle]
-        if (item.vm !== vm) continue
+        if (!(vm && item.vm === vm) && !(stable && item.identity === stable)) continue
         const renewed: StoredAccount = { ...item, cookies: cleanCookies, cookies_exp: cleanExp }
+        if (stable) renewed.identity = stable
+        if (vm && !renewed.vm) renewed.vm = vm
+        const name = stableName(renewed.label || "", stable)
+        if (name) renewed.label = name
         next[handle] = renewed
         this.saveLocked(next)
+        const accountId = accountIdOf(renewed.label || "")
         return {
           handle,
           expires: expiryMs(cleanExp),
           label: renewed.label || "",
+          ...(accountId ? { accountId } : {}),
           again: true,
           account: { id: handle, label: renewed.label || "", cookies: { ...cleanCookies }, cookies_exp: { ...cleanExp } },
         }
@@ -79,15 +88,18 @@ export class Store {
     }
     const handle = "muse-" + randomHex(6)
     const created = new Date()
-    const name = label || `muse.ai ${stamp(created)} 登录`
+    const name = stableName(label, stable) || `muse.ai ${stamp(created)} 登录`
     const record: StoredAccount = { cookies: cleanCookies, cookies_exp: cleanExp, label: name, created: created.getTime() }
     if (vm) record.vm = vm
+    if (stable) record.identity = stable
     next[handle] = record
     this.saveLocked(next)
+    const accountId = accountIdOf(name)
     return {
       handle,
       expires: expiryMs(cleanExp),
       label: name,
+      ...(accountId ? { accountId } : {}),
       account: { id: handle, label: name, cookies: { ...cleanCookies }, cookies_exp: { ...cleanExp } },
     }
   }
@@ -115,4 +127,25 @@ export class Store {
 function stamp(at: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0")
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`
+}
+
+// A sign-in time is a name only until the next sign-in: it must be replaced by muse.ai's own id
+// as soon as that is known, so Magpie keeps one account instead of a look-alike per login.
+const SIGN_IN_STAMP = /^muse\.ai \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? 登录$/
+
+function cleanIdentity(identity: string): string {
+  const id = String(identity || "").trim()
+  return id.length > 0 && id.length <= 128 ? id : ""
+}
+
+// What the account is called: muse.ai's readable name when it sent one, else its own id.
+function stableName(label: string, identity: string): string {
+  if (!identity) return label
+  if (!label || SIGN_IN_STAMP.test(label)) return `muse.ai #${identity}`
+  return label
+}
+
+// The name to key the account by in Magpie: never a sign-in time.
+function accountIdOf(name: string): string | undefined {
+  return name && !SIGN_IN_STAMP.test(name) ? name : undefined
 }

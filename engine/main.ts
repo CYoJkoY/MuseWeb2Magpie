@@ -132,7 +132,7 @@ async function run(): Promise<void> {
       case "store.get":
         return store.get(String(params?.handle || "")) ?? null
       case "store.add":
-        return store.add(params?.cookies || {}, params?.cookies_exp || {}, String(params?.label || ""), String(params?.vm || ""))
+        return store.add(params?.cookies || {}, params?.cookies_exp || {}, String(params?.label || ""), String(params?.vm || ""), String(params?.identity || ""))
       case "store.update":
         store.update(String(params?.handle || ""), params?.cookies ?? null, params?.cookies_exp ?? null, String(params?.vm || ""))
         return null

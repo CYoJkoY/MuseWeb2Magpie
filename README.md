@@ -234,10 +234,12 @@ magpie plugin add ./MuseWeb2Magpie
 
 登录后引擎向 muse.ai 确认会话，关掉登录窗口，再发一条很短的测试消息：账号真的能回答，才算登录成功。账号额度已用完的也算成功，只是暂时用不了。
 
-- 账号默认以登录时间命名，例如「muse.ai 2026-10-13 14:03 登录」。
+若 muse.ai 在这个窗口里要求人机验证（Cloudflare / hCaptcha 一类的「请完成验证」页），引擎不会关窗口，也不会替你跳走：进度页会写明「请在这个仍打开的窗口里完成验证」，验证通过后引擎自动继续登录。只有这个窗口里能做这件事，请别提前关掉它。
+
+- 账号以 muse.ai 自己的账号 ID 命名，例如「muse.ai #1830…」；muse.ai 给出可读名字（如邮箱）时用那个名字。
 - 15 分钟内没登录完，这次登录作废，并说明卡在哪一步。
 - 测试消息会在 muse.ai 的对话记录里留下一条“连通测试”。
-- 再登录一次同一个 muse.ai 账号会更新原来那个账号（按 muse.ai 分配的虚拟机 ID 识别），名字和位置都不变，不会多出一个。
+- 再登录一次同一个 muse.ai 账号会更新原来那个账号（按 muse.ai 的账号 ID 与虚拟机 ID 识别），名字和位置都不变，不会多出一个；早期按登录时间命名的账号也会在下次登录时换成这个名字。
 - 没有桌面的 Linux 打不开登录窗口，插件会直接说明。
 
 **引擎账号 ID（高级）**：自己另外运行引擎（`MUSE_WEB_ENGINE`）时，填引擎给出的账号 ID。
@@ -351,6 +353,8 @@ magpie provider test muse-web          # 发一条真实的小请求，检查整
 | 登录窗口登录成功，进度页却一直停在「正在发一条测试消息」| Donut Browser 免费版的 Wayfern 内核会开窗口、也提供调试端口，但拒绝 `Runtime.evaluate`（回复 `Browser automation requires a paid Donut Browser plan.`），引擎没法在它里面操作页面。0.12.7 起引擎启动后会先探测，被拒绝就改用系统里的 Chrome/Edge/Chromium 重开，并在 `engine.log` 记一行 `不允许自动化`；只有 muse.ai 说会话失效才删账号，其它情况账号会保留并在进度页提示「已保存但未确认」。本机没有第二个浏览器时，装一个 Chromium 系浏览器或用 `MUSE_WEB_CHROME` 指定 |
 | 提示「浏览器没有打开调试端口」 | 报错里写着等了多久、`DevToolsActivePort` 是还没出现还是里面写着什么、最后一次探测的回答、以及浏览器自己最后三行 stderr，按这四样判断：冷启动慢（老硬盘、开机后第一次启动、被安全软件扫描）就把 `MUSE_WEB_START_MS` 调长，比如 `180000`；文件一直不出现时看 stderr 里浏览器自己说的原因 |
 | 页面写着「Muse已解除关联」，或返回 `account_unlinked` | muse.ai 已在这个账号侧解除了 Muse 工作区（虚拟机 `DISABLED`，唤醒被拒），重新登录不会恢复。引擎会把这个登录窗口留在这一页：在那个窗口里点「提交工单」，填「提交反馈」表单（主题选「账户访问与登录」），关联成功后再登录一次；换一个没被解除关联的账号也能立刻继续用 |
+| 登录窗口停在「请完成验证」，进度页也这么写 | muse.ai 要人机验证。请在那个仍打开的窗口里完成验证，别关掉它：引擎不会替你点，也不会跳走或关窗口，验证通过后会自动继续登录并关窗口。若窗口已经关了，重新登录一次即可 |
+| 重新登录后 Magpie 里多出一个同名账号 | 0.13.0 起账号按 muse.ai 的账号 ID 命名，同一账号再登录会更新原来那个；旧版本留下的、按登录时间命名的账号会在下次登录时改成 `muse.ai #…`。仍然多出来时删掉旧卡片再登录一次 |
 | 日志显示指纹浏览器下载或安装失败 | 引擎会自动改用本机 Chrome/Edge/Chromium。检查网络代理后重试，或用 `MUSE_WEB_FINGERPRINT_BROWSER` 指定本机已有的 Apostate 或 Wayfern 内核；确实不想用它时设 `MUSE_WEB_FINGERPRINT=0` |
 | 登录失败：「已登录，但账号没有回答测试消息」 | 会话拿到了但对话不通，常见于虚拟机还在预热，稍后重新登录 |
 | Agent 说它看不到你的文件，或让你自己运行命令 | 模型这次没按工具格式回答，重试或换种说法；日志里会是 `tools=…→text` |
@@ -480,4 +484,4 @@ An unofficial [Magpie](https://github.com/yetone/magpie) provider plugin for mus
 
 Tool calls are supported through the prompt: the model writes them in `tool_call` code blocks, which come back as standard `tool_calls`; `tool_choice: required` gets one repair turn. Long histories are trimmed to roughly 400K characters / 80 turns with an explicit omission note. Errors carry `error.code` and 429/503 responses carry `Retry-After`.
 
-Install with `magpie plugin add github:CYoJkoY/MuseWeb2Magpie`, then `magpie plugin login muse-web`. Sign-in opens two windows: the system browser shows a local progress page, and the separate window where you actually sign in uses the engine's own browser — Donut Browser's Wayfern kernel when Donut is installed, otherwise the open-source fingerprint browser Apostate (a local copy first, then a pinned, sha256-checked download into the data directory), falling back to Chrome, Edge, Chromium or Brave. Wayfern is an ordinary Chromium at the command line, so it launches without fingerprint flags. Set `MUSE_WEB_DONUT_BROWSER` to a Donut data folder or kernel path when Donut lives elsewhere, or to `0` to skip Donut. If the list misses your browser, pick the last entry and type the absolute path to the executable itself - pasted quotes are trimmed, and a relative path, a folder or a missing file is refused before sign-in starts. Firefox cannot be that window. Text only. MIT licensed. For the Meta Muse Code API instead of the web account, see `magpie-muse-auth` (provider `muse`).
+Install with `magpie plugin add github:CYoJkoY/MuseWeb2Magpie`, then `magpie plugin login muse-web`. Sign-in opens two windows: the system browser shows a local progress page, and the separate window where you actually sign in uses the engine's own browser — Donut Browser's Wayfern kernel when Donut is installed, otherwise the open-source fingerprint browser Apostate (a local copy first, then a pinned, sha256-checked download into the data directory), falling back to Chrome, Edge, Chromium or Brave. Wayfern is an ordinary Chromium at the command line, so it launches without fingerprint flags. Set `MUSE_WEB_DONUT_BROWSER` to a Donut data folder or kernel path when Donut lives elsewhere, or to `0` to skip Donut. If the list misses your browser, pick the last entry and type the absolute path to the executable itself - pasted quotes are trimmed, and a relative path, a folder or a missing file is refused before sign-in starts. If muse.ai puts a human-verification wall in that window, finish it there: the engine keeps the window open and carries on once it clears. Accounts are named by muse.ai's own account id (`muse.ai #...`, or the readable name it sends), so signing in again renews the same account. Firefox cannot be that window. Text only. MIT licensed. For the Meta Muse Code API instead of the web account, see `magpie-muse-auth` (provider `muse`).

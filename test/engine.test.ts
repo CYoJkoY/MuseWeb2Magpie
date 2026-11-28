@@ -10,7 +10,7 @@ import os from "node:os"
 import path from "node:path"
 import { browserArgs, findBrowser } from "../engine/browser.ts"
 import { noDesktop } from "../engine/login.ts"
-import { cookieSpecs, ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, usageCard } from "../engine/muse.ts"
+import { cookieSpecs, ESSENTIAL, expiryMs, labelOf, mediaMarkdown, Muse, parseSetCookies, redact, renewSession, resetDate, settingsItem, settle, stableAccountId, usageCard } from "../engine/muse.ts"
 import { parseToolCalls, toolChoiceRequired, toolChoiceSatisfied, toolsPrompt } from "../engine/tools.ts"
 import { VERSION } from "../engine/version.ts"
 import { parseScutil, parseWinProxy, proxyForBrowser, proxyHasCredentials, resolveProxy } from "../engine/net.ts"
@@ -301,6 +301,26 @@ describe("pure parts", () => {
     assert.equal(labelOf({ status: "assigned", vm_id: "x" }), "")
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
     assert.equal(VERSION, pkg.version)
+  })
+
+  test("the stable account id is muse.ai's own, read from /api/falco and bounded", async () => {
+    const urls: string[] = []
+    const answering = async (url: any) => {
+      urls.push(String(url))
+      return new Response(JSON.stringify({ user: { kind: "user", identifier: "acct-123" } }), { status: 200 })
+    }
+    assert.equal(await stableAccountId("https://muse.ai", { hatch_sess: "s" }, { fetchImpl: answering }), "acct-123")
+    assert.deepEqual(urls, ["https://muse.ai/api/falco"])
+
+    // Anything but a signed-in answer with a sane id is no id at all — never a guess at one.
+    const refused = async () => new Response("{}", { status: 401 })
+    assert.equal(await stableAccountId("https://muse.ai", { hatch_sess: "s" }, { fetchImpl: refused }), "")
+    const huge = async () => new Response(JSON.stringify({ user: { identifier: "x".repeat(200) } }), { status: 200 })
+    assert.equal(await stableAccountId("https://muse.ai", {}, { fetchImpl: huge }), "")
+    const garbled = async () => new Response("not json", { status: 200 })
+    assert.equal(await stableAccountId("https://muse.ai", {}, { fetchImpl: garbled }), "")
+    const down = async () => { throw new Error("offline") }
+    assert.equal(await stableAccountId("https://muse.ai", {}, { fetchImpl: down }), "")
   })
 
   test("usage: the settings page's meters become Magpie's windows", () => {

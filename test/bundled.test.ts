@@ -14,7 +14,7 @@ import { findBrowser } from "../engine/browser.ts"
 import { healthProof } from "../engine/health.ts"
 import { anyFetch } from "../engine/local-fetch.ts"
 import { MuseWebPlugin } from "../index.ts"
-import { startFakeMuse } from "./fake-muse.ts"
+import { ACCOUNT_IDENTITY, startFakeMuse } from "./fake-muse.ts"
 
 const skip = findBrowser() ? false : "no Chrome/Edge/Chromium installed"
 // A fixed key written before the engine starts, so the fake legacy engine below can prove it knows
@@ -123,7 +123,9 @@ test("sign in through the browser, chat, refresh, and survive an engine restart"
   assert.equal(done.type, "success")
   assert.match(done.refresh, /^muse-/)
   assert.ok(done.expires > Date.now())
-  assert.match(done.accountId, /登录$/)
+  // The account is named by muse.ai's own id, not the sign-in time: signing in again has to renew
+  // this account rather than add a look-alike with a new label.
+  assert.equal(done.accountId, `muse.ai #${ACCOUNT_IDENTITY}`)
 
   const auth = { type: "oauth", refresh: done.refresh, access: done.access, expires: done.expires }
   const loaded = await hooks.auth.loader(async () => auth)

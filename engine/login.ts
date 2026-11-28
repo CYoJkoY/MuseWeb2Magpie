@@ -9,7 +9,7 @@ import path from "node:path"
 import { browserPathProblem, launchBrowser, normalizeBrowserPath, pageUrl } from "./browser.ts"
 import { CDP, httpJSON } from "./cdp.ts"
 import { fingerprintArgs, isFingerprintBrowser, stableFingerprintSeed } from "./fingerprint.ts"
-import { AccountUnlinkedError, AuthError, ESSENTIAL, UNLINKED, renewSession } from "./muse.ts"
+import { AccountUnlinkedError, AuthError, ESSENTIAL, UNLINKED, renewSession, stableAccountId } from "./muse.ts"
 import type { Cookies, ExpiryMap, SavedAccount } from "./types.ts"
 
 type LoginRun = {
@@ -19,6 +19,7 @@ type LoginRun = {
   handle?: string
   expires?: number | null
   label?: string
+  accountId?: string
   error?: string
   stop?: () => void
   [key: string]: any
@@ -45,13 +46,31 @@ export function chatTarget(list: unknown, port: number, site: string): string | 
   return (onSite ?? pages[0])?.address ?? null
 }
 
-// What the sign-in window is showing, in the two answers that decide the run: a composer means the
-// account can be used, and the 「Muse已解除关联」 screen means only a person can do anything.
+// What the sign-in window is showing, in the three answers that decide the run: a composer means
+// the account can be used, the 「Muse已解除关联」 screen means only a person can do anything, and a
+// verification wall means a person has to finish it in this window before anything else can happen.
+const CHALLENGE_MARKERS = ["Verify you are human", "Just a moment", "Checking your browser", "complete the security check", "请完成验证", "人机验证", "安全验证", "确认您是真人"]
 const SCREEN_JS = `(function(){
   var b = document.body;
+  var text = b ? b.innerText.slice(0, 2000) : "";
+  var challenge = ${JSON.stringify(CHALLENGE_MARKERS)}.some(function (m) { return text.indexOf(m) !== -1; });
+  // A widget counts only when it is on screen: the sign-in page also ships hidden challenge
+  // containers, and a hidden one is not something a person could be asked to pass.
+  var shown = function (sel) {
+    return Array.prototype.some.call(document.querySelectorAll(sel), function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return false;
+      var s = getComputedStyle(el);
+      return s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+    });
+  };
+  if (!challenge && shown('input[name="cf-turnstile-response"], iframe[src*="challenges.cloudflare.com"], iframe[src*="hcaptcha"], .h-captcha, textarea[name="g-recaptcha-response"], .g-recaptcha')) challenge = true;
   return JSON.stringify({
-    text: b ? b.innerText.slice(0, 2000) : "",
-    composer: !!document.querySelector('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')
+    text: text,
+    // Verification vendors also insert hidden textareas as response fields. They are not chat
+    // composers and must not make the challenge look like a usable signed-in page.
+    composer: shown('textarea:not([name="cf-turnstile-response"]):not([name="g-recaptcha-response"]), [contenteditable="true"][role="textbox"], [contenteditable="true"]'),
+    challenge: challenge
   });
 })()`
 
@@ -59,6 +78,16 @@ const SCREEN_JS = `(function(){
 // finished from here: muse.ai replaced the chat with a form, and the form is the way back.
 export function screenNeedsPerson(screen: { text: string; composer: boolean }): boolean {
   return !screen.composer && UNLINKED.test(String(screen.text || ""))
+}
+
+// A verification wall, unlike the unlinked screen, is passed by the person sitting at this
+// window: the run must keep the window open and wait, never close it. A composer still wins —
+// a page that can take a message is a usable account whatever else it paints.
+export function screenChallenged(screen: { text?: string; composer?: boolean; challenge?: boolean }): boolean {
+  if (screen.composer) return false
+  if (screen.challenge) return true
+  const text = String(screen.text || "")
+  return CHALLENGE_MARKERS.some((m) => text.includes(m))
 }
 
 // Said while the window is still open, on the screen it is showing. Every step named here can be
@@ -82,7 +111,7 @@ export class Logins {
   limitMs: number
   headless: boolean
   screenMs: number
-  onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string) => Promise<SavedAccount>
+  onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string, accountId: string) => Promise<SavedAccount>
   runs: Map<string, LoginRun>
 
   constructor({ site, executable, resolveExecutable, dir, proxy = "", fetchImpl = fetch, everyMs = 2000, limitMs = 15 * 60_000, headless = false, screenMs = 15_000, onDone }: {
@@ -96,7 +125,7 @@ export class Logins {
     limitMs?: number
     headless?: boolean
     screenMs?: number
-    onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string) => Promise<SavedAccount>
+    onDone: (cookies: Cookies, exp: ExpiryMap, label: string, vm: string, accountId: string) => Promise<SavedAccount>
   }) {
     this.site = site.replace(/\/+$/, "")
     this.host = new URL(this.site).hostname
@@ -252,18 +281,33 @@ export class Logins {
     const started = Date.now()
     let busy = false
     let sentToChat = 0
+    // A wall the person has to pass says so in the same words every tick; the run keeps the window
+    // and stays pending, and the next tick that sees the composer carries on where it left off.
+    const challengeStep = "muse.ai 要求人机验证：请在这个仍打开的窗口里完成验证（不要关闭窗口）；通过后会自动继续登录。"
     timer = setInterval(async () => {
       if (busy || run.status !== "pending") return
       if (Date.now() - started > this.limitMs) return finish({ status: "failed", error: "登录超时" })
       busy = true
       try {
         const got = await this.cookies(opened.browser)
-        if (got.cookies.hatch_sess && !ESSENTIAL.every((n) => got.cookies[n]) && Date.now() - sentToChat > 20_000) {
+        const essential = ESSENTIAL.every((n) => got.cookies[n])
+        // The site may paint a verification wall instead of a form — on the sign-in page, or on the
+        // chat page it is sent to. The engine cannot pass it, and anything else this tick does
+        // (navigating to the chat page, closing the window) would throw away the check the person
+        // is in the middle of, so the wall is read first and the run waits with the window open.
+        if (!this.headless) {
+          const seen = await this.windowScreen(opened.port, 700)
+          if (screenChallenged(seen)) {
+            run.step = challengeStep
+            return
+          }
+        }
+        if (got.cookies.hatch_sess && !essential && Date.now() - sentToChat > 20_000) {
           sentToChat = Date.now()
           run.step = "已登录，正在打开聊天页领取会话"
           await this.openChat(opened.port)
         }
-        if (ESSENTIAL.every((n) => got.cookies[n])) {
+        if (essential) {
           run.step = "正在向 muse.ai 确认会话"
           const renewed = await renewSession(this.site, got.cookies, got.exp, { fetchImpl: this.fetchImpl, wakeVm: false })
           // Read the window before closing it. muse.ai answers /api/session for a workspace it has
@@ -277,17 +321,25 @@ export class Logins {
             }
             run.step = "正在确认这个账号还能用（就看你登录的这个窗口）"
             const screen = await this.windowScreen(opened.port, this.screenMs)
+            if (screenChallenged(screen)) {
+              run.step = challengeStep
+              return
+            }
             if (screenNeedsPerson(screen)) {
               hold()
               return
             }
           }
+          // muse.ai's stable id for this account, read once while the cookies are still fresh: the
+          // sign-in time label changes with every login, this does not, so Magpie can keep naming
+          // the same account instead of adding a look-alike on each sign-in.
+          if (!run.accountId) run.accountId = await stableAccountId(this.site, got.cookies, { fetchImpl: this.fetchImpl }).catch(() => "")
           // the window has done its part; onDone may still be checking the account answers
           close()
           run.step = "已领到会话，正在发一条测试消息确认账号能回答"
           try {
-            const saved = await this.onDone(renewed.cookies, renewed.cookies_exp, renewed.label, renewed.vm)
-            finish({ status: "done", handle: saved.handle, expires: saved.expires, label: saved.label, warning: saved.warning })
+            const saved = await this.onDone(renewed.cookies, renewed.cookies_exp, renewed.label, renewed.vm, run.accountId || "")
+            finish({ status: "done", handle: saved.handle, expires: saved.expires, label: saved.label, accountId: saved.accountId || run.accountId || saved.label, warning: saved.warning })
           } catch (err: any) {
             // The account was saved, then the test message met the unlinked screen: the window is
             // gone, so the message has to say that signing in again opens one.
@@ -307,10 +359,11 @@ export class Logins {
   // screen, which means the form in this very window is the only way back. Anything else (a page
   // still painting, a site that has not decided yet) is waited out up to the ceiling, and the
   // caller then behaves exactly as it did before this check existed.
-  async windowScreen(port: number, ms: number): Promise<{ text: string; composer: boolean }> {
+  async windowScreen(port: number, ms: number): Promise<{ text: string; composer: boolean; challenge: boolean }> {
     const end = Date.now() + ms
     let text = ""
     let composer = false
+    let challenge = false
     while (Date.now() < end) {
       const list: unknown = await httpJSON(`http://127.0.0.1:${port}/json/list`, 2000).catch(() => null)
       const target = chatTarget(list, port, this.site)
@@ -321,15 +374,16 @@ export class Logins {
             const seen = JSON.parse(String((await page.js(SCREEN_JS).catch(() => "")) || "{}") || "{}")
             text = String(seen.text || "")
             composer = Boolean(seen.composer)
+            challenge = Boolean(seen.challenge)
           } finally {
             page.close()
           }
         }
       }
-      if (composer || UNLINKED.test(text)) return { text, composer }
+      if (composer || challenge || UNLINKED.test(text)) return { text, composer, challenge }
       await new Promise((r) => setTimeout(r, 500))
     }
-    return { text, composer }
+    return { text, composer, challenge }
   }
 
   async cookies(browser: any): Promise<{ cookies: Cookies; exp: ExpiryMap }> {
@@ -347,11 +401,11 @@ export class Logins {
   status(id: string): any {
     const run = this.runs.get(id)
     if (!run) return null
-    const { status, step, note, handle, expires, label, warning, error } = run
+    const { status, step, note, handle, expires, label, accountId, warning, error } = run
     return {
       status,
       ...((status === "pending" || status === "starting") ? { step, ...(note ? { note } : {}) } : {}),
-      ...(handle ? { handle, expires, label } : {}),
+      ...(handle ? { handle, expires, label, ...(accountId ? { accountId } : {}) } : {}),
       ...(warning ? { warning } : {}),
       ...(error ? { error } : {}),
     }

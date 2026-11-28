@@ -4,6 +4,8 @@
 import http from "node:http"
 
 const ESSENTIAL = ["hatch_sess", "hatch_gw", "hatch_vml", "hatch_native_auth_device"]
+// muse.ai's own id for the signed-in account, as /api/falco's user.identifier carries it.
+const ACCOUNT_ID = "id-fake-muse-0001"
 
 const CHAT = `<!doctype html><html><head><meta charset="utf-8"><title>muse</title>
 <style>main{height:400px;overflow-y:auto}</style></head>
@@ -138,7 +140,7 @@ function cookies(req) {
 }
 
 export async function startFakeMuse({ loginDelayMs = 600, newBuild = false } = {}) {
-  const state = { prompts: [], sessionCalls: 0, wakeCalls: 0, pageLoads: 0, decoys: 0, usage: { weekly: 12, extra: 0, reset: "10月15日" }, usageReads: 0 }
+  const state = { prompts: [], sessionCalls: 0, wakeCalls: 0, pageLoads: 0, decoys: 0, falcoCalls: 0, usage: { weekly: 12, extra: 0, reset: "10月15日" }, usageReads: 0 }
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x")
     const c = cookies(req)
@@ -166,6 +168,13 @@ export async function startFakeMuse({ loginDelayMs = 600, newBuild = false } = {
     if (url.pathname === "/api/fake-usage") {
       state.usageReads++
       return res.end(JSON.stringify(state.usage))
+    }
+    // Signed-in at the same time as /api/session, and the only stable id muse.ai gives: the
+    // engine reads it to name the account the same way on every sign-in.
+    if (url.pathname === "/api/falco") {
+      state.falcoCalls++
+      if (!signedIn) return res.writeHead(401).end("{}")
+      return res.end(JSON.stringify({ user: { kind: "user", identifier: ACCOUNT_ID } }))
     }
     if (url.pathname === "/api/hatch/vm/wake") {
       state.wakeCalls++
@@ -196,3 +205,4 @@ export async function startFakeMuse({ loginDelayMs = 600, newBuild = false } = {
 }
 
 export const goodCookies = () => Object.fromEntries(ESSENTIAL.map((n) => [n, `good-${n}`]))
+export const ACCOUNT_IDENTITY = ACCOUNT_ID
